@@ -5,7 +5,7 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Comco - RTA Trends Dashboard (FactoryTalk True)", layout="wide")
+st.set_page_config(page_title="Comco - RTA Trends Dashboard (FactoryTalk True v2)", layout="wide")
 
 RAW_CSV_URL = os.environ.get("RAW_CSV_URL", "").strip()
 LOCAL_CSV = "Last_30_Day_Data_Group_45.csv"
@@ -30,13 +30,16 @@ df, data_source, last_updated = load_data(RAW_CSV_URL, LOCAL_CSV)
 # Sidebar
 st.sidebar.title("Filters")
 
-# Datetime filtering
-start_dt = st.sidebar.datetime_input("Start datetime", df["Time"].min())
-end_dt   = st.sidebar.datetime_input("End datetime", df["Time"].max())
+# Safe defaults for datetime pickers
+default_start = df["Time"].min() if "Time" in df.columns and not df.empty else pd.Timestamp.now() - pd.Timedelta(days=1)
+default_end   = df["Time"].max() if "Time" in df.columns and not df.empty else pd.Timestamp.now()
 
-groups = sorted(df["Tag_Group"].dropna().unique())
-equipments = sorted(df["Equipment"].dropna().unique())
-tags = sorted(df["Tag_Name"].dropna().unique())
+start_dt = st.sidebar.datetime_input("Start datetime", default_start)
+end_dt   = st.sidebar.datetime_input("End datetime", default_end)
+
+groups = sorted(df["Tag_Group"].dropna().unique()) if "Tag_Group" in df.columns else []
+equipments = sorted(df["Equipment"].dropna().unique()) if "Equipment" in df.columns else []
+tags = sorted(df["Tag_Name"].dropna().unique()) if "Tag_Name" in df.columns else []
 
 # Preset tag sets
 preset = st.sidebar.selectbox("Preset Tag Set", ["Custom","Weighfeeders","Motors","Conveyors","Screeners","All"])
@@ -80,27 +83,28 @@ else:
     y_min, y_max = None, None
 
 # Filtering
-mask = (
-    df["Tag_Group"].isin(sel_group) &
-    df["Equipment"].isin(sel_equip) &
-    df["Tag_Name"].isin(sel_tags) &
-    (df["Time"] >= pd.to_datetime(start_dt)) &
-    (df["Time"] <= pd.to_datetime(end_dt))
-)
-if quality_ok_only and "Quality" in df.columns:
-    mask &= df["Quality"].eq("Good")
+if not df.empty:
+    mask = (
+        df["Tag_Group"].isin(sel_group) &
+        df["Equipment"].isin(sel_equip) &
+        df["Tag_Name"].isin(sel_tags) &
+        (df["Time"] >= pd.to_datetime(start_dt)) &
+        (df["Time"] <= pd.to_datetime(end_dt))
+    )
+    if quality_ok_only and "Quality" in df.columns:
+        mask &= df["Quality"].eq("Good")
 
-f = df.loc[mask, ["Time","Equipment","Tag_Name","Value","Tag_Group","Quality"]].copy()
+    f = df.loc[mask, ["Time","Equipment","Tag_Name","Value","Tag_Group","Quality"]].copy()
 
-# Optional resampling
-if resample_rule:
-    f = f.set_index("Time").groupby(["Equipment","Tag_Name"]).resample(resample_rule)["Value"].mean().reset_index()
+    if resample_rule:
+        f = f.set_index("Time").groupby(["Equipment","Tag_Name"]).resample(resample_rule)["Value"].mean().reset_index()
+else:
+    f = pd.DataFrame()
 
-st.title("Comco - RTA Trends Dashboard (FactoryTalk True)")
+st.title("Comco - RTA Trends Dashboard (FactoryTalk True v2)")
 st.caption(f"Source: {data_source} • Last updated: {last_updated}")
 st.markdown("Reproduces true FactoryTalk view — full datetime filtering, raw analog values, and optional resampling.")
 
-# Axis mapping
 AXIS_MAP = {
     "Feedrate": ("y", "kg/hr"), "Setpoint": ("y", "kg/hr"), "Rolling_Avg": ("y", "tph"), "Totalizer": ("y", "t"),
     "Load": ("y2", "%"), "Gate_Pos_CMD": ("y2", "%"), "Belt_Speed": ("y3", "m/s"), "Motor_Current": ("y4", "A"),
@@ -144,15 +148,13 @@ def add_traces(fig, frame, title):
     )
     return fig
 
-# Full range
 fig_full = go.Figure()
 fig_full = add_traces(fig_full, f, "Full Range — Selected Tags (Multi-axis)")
 st.plotly_chart(fig_full, use_container_width=True)
 
-# Download button
 csv = f.to_csv(index=False).encode("utf-8")
 st.download_button("⬇ Download filtered CSV", csv, "filtered_trend_data.csv", "text/csv")
 
 st.markdown("### Data Preview")
 st.dataframe(f.head(500), use_container_width=True)
-st.caption("FactoryTalk-True Mode: raw analog data, full datetime filtering, resampling option, tag presets, and CSV export.")
+st.caption("FactoryTalk-True Mode v2: safe datetime initialization, raw analog data, full datetime filtering, resampling, tag presets, and CSV export.")
