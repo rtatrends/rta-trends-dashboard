@@ -58,7 +58,7 @@ if quality_ok_only and "Quality" in df.columns:
 f = df.loc[mask, ["Time","Equipment","Tag_Name","Value","Tag_Group","Quality"]].copy()
 f_zoom = f[(f["Time"].dt.time >= start_time) & (f["Time"].dt.time <= end_time)]
 
-st.title("📊 RTA Trends — FactoryTalk Style")
+st.title("Comco - RTA Trends Dashboard")
 st.caption(f"Source: {data_source} • Last updated: {last_updated}")
 st.markdown("Use the left filters + start/end time to reproduce the FactoryTalk window. Hover any point to see exact values.")
 
