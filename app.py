@@ -26,6 +26,7 @@ def load_data(raw_url: str, local_path: str):
 
 df, data_source, last_updated = load_data(RAW_CSV_URL, LOCAL_CSV)
 
+# Sidebar filters
 st.sidebar.title("Filters")
 min_date, max_date = df["Time"].min().date(), df["Time"].max().date()
 date_range = st.sidebar.date_input("Date range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
@@ -39,6 +40,10 @@ sel_equip = st.sidebar.multiselect("Equipment", equipments, default=["FEB_001","
 sel_tags = st.sidebar.multiselect("Tag(s)", tags, default=["Feedrate","Setpoint","Load","Belt_Speed"])
 quality_ok_only = st.sidebar.checkbox("Quality = Good only", value=True)
 
+# Add absolute value toggle
+abs_values = st.sidebar.checkbox("📈 Show absolute TPH (ignore negative direction)", value=True)
+
+# Time window
 start_time = st.sidebar.time_input("Start Time", pd.to_datetime("05:00").time())
 end_time   = st.sidebar.time_input("End Time",   pd.to_datetime("07:00").time())
 
@@ -51,6 +56,7 @@ if y_mode == "Manual range":
 else:
     y_min, y_max = None, None
 
+# Filtering
 mask = (
     df["Tag_Group"].isin(sel_group) &
     df["Equipment"].isin(sel_equip) &
@@ -64,8 +70,15 @@ if quality_ok_only and "Quality" in df.columns:
 f = df.loc[mask, ["Time","Equipment","Tag_Name","Value","Tag_Group","Quality"]].copy()
 f_zoom = f[(f["Time"].dt.time >= start_time) & (f["Time"].dt.time <= end_time)]
 
+# Apply absolute values if checkbox is ON
+if abs_values:
+    abs_tags = ["Feedrate", "Setpoint", "Load", "Rolling_Avg"]
+    f.loc[f["Tag_Name"].isin(abs_tags), "Value"] = f.loc[f["Tag_Name"].isin(abs_tags), "Value"].abs()
+    f_zoom.loc[f_zoom["Tag_Name"].isin(abs_tags), "Value"] = f_zoom.loc[f_zoom["Tag_Name"].isin(abs_tags), "Value"].abs()
+
 st.title("Comco - RTA Trends Dashboard")
 st.caption(f"Source: {data_source} • Last updated: {last_updated}")
+st.markdown("Use filters + time window to reproduce FactoryTalk view. Hover for exact values.")
 
 AXIS_MAP = {
     "Feedrate": ("y", "kg/hr"), "Setpoint": ("y", "kg/hr"), "Rolling_Avg": ("y", "tph"), "Totalizer": ("y", "t"),
@@ -121,4 +134,4 @@ st.plotly_chart(fig_zoom, use_container_width=True)
 
 st.markdown("### Data Preview")
 st.dataframe(f.head(500), use_container_width=True)
-st.caption("Flexible Y-axis: choose Auto, Fixed, or Manual scaling.")
+st.caption("Added 'Show absolute TPH' option — converts Feedrate, Setpoint, Load, and Rolling_Avg to positive values when checked.")
