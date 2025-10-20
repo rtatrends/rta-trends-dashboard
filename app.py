@@ -5,7 +5,7 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Comco - RTA Trends Dashboard (FactoryTalk Overlay v6)", layout="wide")
+st.set_page_config(page_title="Comco - RTA Trends Dashboard", layout="wide")
 
 RAW_CSV_URL = os.environ.get("RAW_CSV_URL", "").strip()
 LOCAL_CSV = "Last_30_Day_Data_Group_45.csv"
@@ -112,7 +112,7 @@ def color_for(tag):
     if "Level" in tag: return COLOR_MAP["Level"]
     return COLOR_MAP.get(tag, "#cccccc")
 
-st.title("Comco - RTA Trends Dashboard (FactoryTalk Overlay v6)")
+st.title("Comco - RTA Trends Dashboard")
 st.caption(f"Source: {data_source} • Last updated: {last_updated}")
 st.markdown("Overlay mode emulates the FactoryTalk panel: percent traces on a reversed left axis, MTPH feedrate on a right axis, all lines solid, true raw timestamps.")
 
