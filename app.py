@@ -5,7 +5,7 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Comco - RTA Trends Dashboard", layout="wide")
+st.set_page_config(page_title="Comco - RTA Trends Dashboard (FactoryTalk True v4)", layout="wide")
 
 RAW_CSV_URL = os.environ.get("RAW_CSV_URL", "").strip()
 LOCAL_CSV = "Last_30_Day_Data_Group_45.csv"
@@ -121,7 +121,7 @@ if not df.empty:
 else:
     f = pd.DataFrame()
 
-st.title("Comco - RTA Trends Dashboard")
+st.title("Comco - RTA Trends Dashboard (FactoryTalk True v4)")
 st.caption(f"Source: {data_source} • Last updated: {last_updated}")
 st.markdown("Reproduces FactoryTalk trends — full datetime filtering, raw analog values, and optional resampling.")
 
