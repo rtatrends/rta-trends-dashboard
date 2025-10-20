@@ -5,30 +5,39 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Comco - RTA Trends Dashboard (FactoryTalk True v3)", layout="wide")
+st.set_page_config(page_title="Comco - RTA Trends Dashboard (FactoryTalk True v4)", layout="wide")
 
 RAW_CSV_URL = os.environ.get("RAW_CSV_URL", "").strip()
 LOCAL_CSV = "Last_30_Day_Data_Group_45.csv"
 
 @st.cache_data(show_spinner=True, ttl=300)
 def load_data(raw_url: str, local_path: str):
-    if raw_url:
-        r = requests.get(raw_url, timeout=30)
-        r.raise_for_status()
-        df = pd.read_csv(io.BytesIO(r.content), parse_dates=["Time"])
-        source = "remote (GitHub raw)"
-        updated = r.headers.get("Last-Modified", "GitHub")
-    else:
-        df = pd.read_csv(local_path, parse_dates=["Time"])
-        source = "local (repo file)"
-        updated = time.ctime(os.path.getmtime(local_path)) if os.path.exists(local_path) else "unknown"
-    df = df.sort_values("Time").reset_index(drop=True)
-    return df, source, updated
+    try:
+        if raw_url:
+            r = requests.get(raw_url, timeout=30)
+            r.raise_for_status()
+            df = pd.read_csv(io.BytesIO(r.content), parse_dates=["Time"])
+            source = "remote (GitHub raw)"
+            updated = r.headers.get("Last-Modified", "GitHub")
+        else:
+            df = pd.read_csv(local_path, parse_dates=["Time"])
+            source = "local (repo file)"
+            updated = time.ctime(os.path.getmtime(local_path)) if os.path.exists(local_path) else "unknown"
+        df = df.sort_values("Time").reset_index(drop=True)
+        return df, source, updated, None
+    except Exception as e:
+        return pd.DataFrame(), "error", "N/A", str(e)
 
-df, data_source, last_updated = load_data(RAW_CSV_URL, LOCAL_CSV)
+df, data_source, last_updated, load_error = load_data(RAW_CSV_URL, LOCAL_CSV)
 
-# Sidebar
-st.sidebar.title("Filters")
+# Sidebar diagnostics
+st.sidebar.title("Filters & Diagnostics")
+if load_error:
+    st.sidebar.error(f"❌ Error loading CSV: {load_error}")
+elif df.empty:
+    st.sidebar.warning("⚠️ CSV found but empty or missing 'Time' column.")
+else:
+    st.sidebar.success(f"✅ CSV loaded • Rows: {len(df)} • Source: {data_source}")
 
 # Safe default date range
 if not df.empty and "Time" in df.columns:
@@ -39,25 +48,23 @@ else:
     default_start = (now - pd.Timedelta(days=1)).date()
     default_end = now.date()
 
-# Date range input (safe for Streamlit Cloud)
-date_range = st.sidebar.date_input(
-    "Select date range", 
-    (default_start, default_end)
-)
+# Safe date_range selector
+date_range = st.sidebar.date_input("Select date range", (default_start, default_end))
 
-# Convert to full datetime range
-if isinstance(date_range, tuple) and len(date_range) == 2:
+# Safe combine logic
+if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
     start_dt = pd.Timestamp.combine(date_range[0], pd.Timestamp.min.time())
-    end_dt = pd.Timestamp.combine(date_range[1], pd.Timestamp.max.time())
+    end_dt   = pd.Timestamp.combine(date_range[1], pd.Timestamp.max.time())
 else:
-    start_dt = pd.Timestamp.combine(date_range, pd.Timestamp.min.time())
-    end_dt = pd.Timestamp.combine(date_range, pd.Timestamp.max.time())
+    single_date = date_range if not isinstance(date_range, (tuple, list)) else date_range[0]
+    start_dt = pd.Timestamp.combine(single_date, pd.Timestamp.min.time())
+    end_dt   = pd.Timestamp.combine(single_date, pd.Timestamp.max.time())
 
+# Sidebar tag selections
 groups = sorted(df["Tag_Group"].dropna().unique()) if "Tag_Group" in df.columns else []
 equipments = sorted(df["Equipment"].dropna().unique()) if "Equipment" in df.columns else []
 tags = sorted(df["Tag_Name"].dropna().unique()) if "Tag_Name" in df.columns else []
 
-# Preset tag sets
 preset = st.sidebar.selectbox("Preset Tag Set", ["Custom","Weighfeeders","Motors","Conveyors","Screeners","All"])
 
 if preset == "Weighfeeders":
@@ -85,7 +92,7 @@ else:
 
 quality_ok_only = st.sidebar.checkbox("Quality = Good only", value=True)
 
-# Resampling
+# Resample options
 resample_choice = st.sidebar.selectbox("Resample frequency", ["None","1s","5s","15s","1min"], index=0)
 resample_rule = None if resample_choice=="None" else resample_choice
 
@@ -104,22 +111,19 @@ if not df.empty:
         df["Tag_Group"].isin(sel_group) &
         df["Equipment"].isin(sel_equip) &
         df["Tag_Name"].isin(sel_tags) &
-        (df["Time"] >= start_dt) &
-        (df["Time"] <= end_dt)
+        (df["Time"] >= start_dt) & (df["Time"] <= end_dt)
     )
     if quality_ok_only and "Quality" in df.columns:
         mask &= df["Quality"].eq("Good")
-
     f = df.loc[mask, ["Time","Equipment","Tag_Name","Value","Tag_Group","Quality"]].copy()
-
     if resample_rule:
         f = f.set_index("Time").groupby(["Equipment","Tag_Name"]).resample(resample_rule)["Value"].mean().reset_index()
 else:
     f = pd.DataFrame()
 
-st.title("Comco - RTA Trends Dashboard (FactoryTalk True v3)")
+st.title("Comco - RTA Trends Dashboard (FactoryTalk True v4)")
 st.caption(f"Source: {data_source} • Last updated: {last_updated}")
-st.markdown("Reproduces true FactoryTalk view — full datetime filtering, raw analog values, and optional resampling.")
+st.markdown("Reproduces FactoryTalk trends — full datetime filtering, raw analog values, and optional resampling.")
 
 AXIS_MAP = {
     "Feedrate": ("y", "kg/hr"), "Setpoint": ("y", "kg/hr"), "Rolling_Avg": ("y", "tph"), "Totalizer": ("y", "t"),
@@ -155,11 +159,11 @@ def add_traces(fig, frame, title):
         title=title, template="plotly_dark", hovermode="x unified", height=650,
         xaxis=dict(title="Time", rangeslider=dict(visible=False)),
         yaxis=yaxis_settings,
-        yaxis2=dict(title="Percent / Gate", overlaying="y", side="right", position=1.0, fixedrange=(y_mode!="Auto (default)")),
-        yaxis3=dict(title="Belt Speed (m/s)", overlaying="y", side="right", position=0.98, showgrid=False, fixedrange=(y_mode!="Auto (default)")),
-        yaxis4=dict(title="Current (A)", overlaying="y", side="right", position=0.96, showgrid=False, fixedrange=(y_mode!="Auto (default)")),
-        yaxis5=dict(title="Switch", overlaying="y", side="right", position=0.94, showgrid=False, fixedrange=(y_mode!="Auto (default)")),
-        yaxis6=dict(title="Pressure PV", overlaying="y", side="right", position=0.92, showgrid=False, fixedrange=(y_mode!="Auto (default)")),
+        yaxis2=dict(title="Percent / Gate", overlaying="y", side="right", position=1.0),
+        yaxis3=dict(title="Belt Speed (m/s)", overlaying="y", side="right", position=0.98, showgrid=False),
+        yaxis4=dict(title="Current (A)", overlaying="y", side="right", position=0.96, showgrid=False),
+        yaxis5=dict(title="Switch", overlaying="y", side="right", position=0.94, showgrid=False),
+        yaxis6=dict(title="Pressure PV", overlaying="y", side="right", position=0.92, showgrid=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
     )
     return fig
@@ -173,4 +177,4 @@ st.download_button("⬇ Download filtered CSV", csv, "filtered_trend_data.csv", 
 
 st.markdown("### Data Preview")
 st.dataframe(f.head(500), use_container_width=True)
-st.caption("FactoryTalk-True Mode v3: safe date range selector, raw analog data, full datetime filtering, resampling, tag presets, and CSV export.")
+st.caption("FactoryTalk-True v4: safe date handling, diagnostic messages, raw analog data, full datetime filtering, resampling, tag presets, and CSV export.")
