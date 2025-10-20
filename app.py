@@ -5,7 +5,7 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Comco - RTA Trends Dashboard (FactoryTalk True v2)", layout="wide")
+st.set_page_config(page_title="Comco - RTA Trends Dashboard (FactoryTalk True v3)", layout="wide")
 
 RAW_CSV_URL = os.environ.get("RAW_CSV_URL", "").strip()
 LOCAL_CSV = "Last_30_Day_Data_Group_45.csv"
@@ -30,12 +30,28 @@ df, data_source, last_updated = load_data(RAW_CSV_URL, LOCAL_CSV)
 # Sidebar
 st.sidebar.title("Filters")
 
-# Safe defaults for datetime pickers
-default_start = df["Time"].min() if "Time" in df.columns and not df.empty else pd.Timestamp.now() - pd.Timedelta(days=1)
-default_end   = df["Time"].max() if "Time" in df.columns and not df.empty else pd.Timestamp.now()
+# Safe default date range
+if not df.empty and "Time" in df.columns:
+    default_start = df["Time"].min().date()
+    default_end = df["Time"].max().date()
+else:
+    now = pd.Timestamp.now()
+    default_start = (now - pd.Timedelta(days=1)).date()
+    default_end = now.date()
 
-start_dt = st.sidebar.datetime_input("Start datetime", default_start)
-end_dt   = st.sidebar.datetime_input("End datetime", default_end)
+# Date range input (safe for Streamlit Cloud)
+date_range = st.sidebar.date_input(
+    "Select date range", 
+    (default_start, default_end)
+)
+
+# Convert to full datetime range
+if isinstance(date_range, tuple) and len(date_range) == 2:
+    start_dt = pd.Timestamp.combine(date_range[0], pd.Timestamp.min.time())
+    end_dt = pd.Timestamp.combine(date_range[1], pd.Timestamp.max.time())
+else:
+    start_dt = pd.Timestamp.combine(date_range, pd.Timestamp.min.time())
+    end_dt = pd.Timestamp.combine(date_range, pd.Timestamp.max.time())
 
 groups = sorted(df["Tag_Group"].dropna().unique()) if "Tag_Group" in df.columns else []
 equipments = sorted(df["Equipment"].dropna().unique()) if "Equipment" in df.columns else []
@@ -88,8 +104,8 @@ if not df.empty:
         df["Tag_Group"].isin(sel_group) &
         df["Equipment"].isin(sel_equip) &
         df["Tag_Name"].isin(sel_tags) &
-        (df["Time"] >= pd.to_datetime(start_dt)) &
-        (df["Time"] <= pd.to_datetime(end_dt))
+        (df["Time"] >= start_dt) &
+        (df["Time"] <= end_dt)
     )
     if quality_ok_only and "Quality" in df.columns:
         mask &= df["Quality"].eq("Good")
@@ -101,7 +117,7 @@ if not df.empty:
 else:
     f = pd.DataFrame()
 
-st.title("Comco - RTA Trends Dashboard (FactoryTalk True v2)")
+st.title("Comco - RTA Trends Dashboard (FactoryTalk True v3)")
 st.caption(f"Source: {data_source} • Last updated: {last_updated}")
 st.markdown("Reproduces true FactoryTalk view — full datetime filtering, raw analog values, and optional resampling.")
 
@@ -157,4 +173,4 @@ st.download_button("⬇ Download filtered CSV", csv, "filtered_trend_data.csv", 
 
 st.markdown("### Data Preview")
 st.dataframe(f.head(500), use_container_width=True)
-st.caption("FactoryTalk-True Mode v2: safe datetime initialization, raw analog data, full datetime filtering, resampling, tag presets, and CSV export.")
+st.caption("FactoryTalk-True Mode v3: safe date range selector, raw analog data, full datetime filtering, resampling, tag presets, and CSV export.")
