@@ -20,7 +20,7 @@ Plots unmodified Feedrate, Motor Current, Setpoint, and Load values directly fro
 @st.cache_data(ttl=3600)
 def load_data():
     url = "https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv"
-    encodings = ["utf-8", "utf-16", "latin1"]
+    encodings = ["utf-16", "utf-8", "latin1"]
     for enc in encodings:
         try:
             df = pd.read_csv(url, encoding=enc, on_bad_lines="skip")
@@ -29,13 +29,10 @@ def load_data():
         except UnicodeDecodeError:
             continue
     else:
-        st.error("❌ Could not decode CSV file. Try saving it as UTF-8 or UTF-16 in Excel.")
+        st.error("❌ Could not decode CSV file. Try saving it as UTF-8 or UTF-16.")
         st.stop()
 
-    # Normalize column names
     df.columns = [c.strip().replace(" ", "_") for c in df.columns]
-
-    # Detect timestamp column
     time_col = next((c for c in df.columns if "time" in c.lower()), None)
     if time_col:
         df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
@@ -44,37 +41,42 @@ def load_data():
         st.error("❌ No timestamp column found in the file.")
         st.stop()
 
-    # Keep numeric data only
     num_cols = df.select_dtypes(include="number").columns.tolist()
     return df, time_col, num_cols
 
 df, time_col, num_cols = load_data()
 st.success(f"✅ Data loaded successfully ({len(df)} rows).")
 
-# --- SIDEBAR FILTERS ---
+# --- SIDEBAR ---
 st.sidebar.header("Filters")
 
 start_time = st.sidebar.time_input("Start Time", value=pd.Timestamp("00:00").time())
 end_time = st.sidebar.time_input("End Time", value=pd.Timestamp("23:59").time())
 
-available_tags = num_cols
-selected_tags = st.sidebar.multiselect(
-    "Select Tags to Display", available_tags, default=["Feedrate"]
-)
+# Checkbox selector
+st.sidebar.markdown("### Select Tags to Display")
+selected_tags = []
+for col in num_cols:
+    if st.sidebar.checkbox(col, value=("Feedrate" in col or "Current" in col)):
+        selected_tags.append(col)
+
+if not selected_tags:
+    st.warning("⚠️ Please select at least one tag to visualize.")
+    st.stop()
 
 # --- FILTER BY TIME ---
 df["TimeOnly"] = df[time_col].dt.time
 filtered = df[(df["TimeOnly"] >= start_time) & (df["TimeOnly"] <= end_time)]
 
 if filtered.empty:
-    st.warning("⚠️ No data found for selected time range.")
+    st.warning("⚠️ No data in this time range.")
     st.stop()
 
 # --- SHORT LABELS ---
 def short_name(tag):
     if "/" in tag or "\\" in tag:
         return tag.split("/")[-1].split("\\")[-1]
-    return tag
+    return tag.split(".")[-1] if "." in tag else tag
 
 short_labels = {col: short_name(col) for col in selected_tags}
 
@@ -98,30 +100,29 @@ for i, tag in enumerate(selected_tags):
             y=filtered[tag],
             mode="lines",
             name=short_labels[tag],
-            line=dict(color=color, width=1.3),
+            line=dict(color=color, width=1.2),
             yaxis=y_axis,
         )
     )
 
-# Base axis
 fig.update_layout(
     xaxis=dict(title="Time"),
     yaxis=dict(title=short_labels.get(selected_tags[0], selected_tags[0])),
     template="plotly_dark",
     hovermode="x unified",
-    legend=dict(orientation="h", y=-0.2),
+    legend=dict(orientation="h", y=-0.25),
 )
 
-# Add extra y-axes
+# Add secondary axes
 for i in range(1, len(selected_tags)):
     fig.update_layout({
         f"yaxis{i+1}": dict(
             title=short_labels[selected_tags[i]],
             overlaying="y",
-            side="right" if i % 2 == 1 else "left",
-            position=1 - (0.04 * i)
+            side="right" if i % 2 else "left",
+            position=1 - (0.05 * i)
         )
     })
 
 st.plotly_chart(fig, use_container_width=True)
-st.caption("Comco RTA Dashboard • Raw historian data • Multi-axis visualization • Powered by Streamlit + Plotly")
+st.caption("Comco RTA Dashboard • Raw historian data • Multi-axis continuous plot • Powered by Streamlit + Plotly")
