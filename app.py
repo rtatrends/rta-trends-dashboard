@@ -1,91 +1,83 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+import os
 
 st.set_page_config(page_title="Comco - RTA Trends Dashboard", layout="wide")
 
-# --- Load data from repo ---
+st.title("Comco - RTA Trends Dashboard")
+st.caption("Live visualization of last 30 days factory trends (Feedrate, Load, Motor Current, Setpoint, etc.)")
+
+# ---------- LOAD DATA ----------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("FactoryData_Clean_30Day.csv", parse_dates=["Time"])
+    file_path = "FactoryData_Clean_30Day.csv"
+    if not os.path.exists(file_path):
+        st.error("❌ File not found. Please ensure FactoryData_Clean_30Day.csv is in the root directory.")
+        st.stop()
+    df = pd.read_csv(file_path, parse_dates=["Time"])
     df = df.sort_values("Time")
     return df
 
 df = load_data()
 
-# --- Sidebar Filters ---
+st.caption(f"Source: repo data • Last updated: {pd.Timestamp.now().strftime('%a %b %d %H:%M:%S %Y')}")
+
+# ---------- SIDEBAR FILTERS ----------
 st.sidebar.header("Filters")
 
-min_date, max_date = df["Time"].min().date(), df["Time"].max().date()
-date_range = st.sidebar.date_input("Date range", value=[min_date, max_date])
+date_range = st.sidebar.date_input(
+    "Date range", value=(df["Time"].min().date(), df["Time"].max().date())
+)
+start_time = st.sidebar.time_input("Start", pd.Timestamp("00:00:00").time())
+end_time = st.sidebar.time_input("End", pd.Timestamp("23:59:00").time())
 
-start_time = st.sidebar.time_input("Start", value=datetime.strptime("00:00", "%H:%M").time())
-end_time = st.sidebar.time_input("End", value=datetime.strptime("23:59", "%H:%M").time())
-
-tag_options = sorted(df["Tag_Name"].unique())
+tag_options = sorted(df["Tag_Name"].dropna().unique())
 selected_tags = st.sidebar.multiselect("Select Tags", tag_options, default=["Feedrate"])
+name_filter = st.sidebar.text_input("Filter by equipment or name", "")
 
-filter_text = st.sidebar.text_input("Filter by name or equipment")
+use_clean = st.sidebar.checkbox("Use cleaned Feedrate (fills dips)", value=True)
+show_markers = st.sidebar.checkbox("Show markers", value=False)
 
-quality_good = st.sidebar.checkbox("Quality = Good only", value=False)
-fill_dips = st.sidebar.checkbox("Use cleaned Feedrate (fill false dips)", value=False)
-show_markers = st.sidebar.checkbox("Markers", value=False)
+# ---------- FILTER ----------
+mask = (
+    (df["Time"].dt.date >= date_range[0])
+    & (df["Time"].dt.date <= date_range[1])
+    & (df["Time"].dt.time >= start_time)
+    & (df["Time"].dt.time <= end_time)
+)
 
-# --- Filter data ---
-f = df.copy()
+filtered = df[mask]
 
-if quality_good:
-    f = f[f["Quality"].str.contains("Good", case=False, na=False)]
+if name_filter:
+    filtered = filtered[filtered["Name"].str.contains(name_filter, case=False, na=False)]
 
-if len(date_range) == 2:
-    start_dt = pd.to_datetime(f"{date_range[0]} {start_time}")
-    end_dt = pd.to_datetime(f"{date_range[1]} {end_time}")
-    f = f[(f["Time"] >= start_dt) & (f["Time"] <= end_dt)]
+filtered = filtered[filtered["Tag_Name"].isin(selected_tags)]
 
-if selected_tags:
-    f = f[f["Tag_Name"].isin(selected_tags)]
+if filtered.empty:
+    st.warning("⚠️ No data found for selected filters.")
+    st.stop()
 
-if filter_text:
-    f = f[f["Equipment"].str.contains(filter_text, case=False, na=False) |
-          f["Tag_Name"].str.contains(filter_text, case=False, na=False)]
+# ---------- PLOT ----------
+fig = px.line(
+    filtered,
+    x="Time",
+    y="Value",
+    color="Tag_Name",
+    line_shape="linear",
+    title="Trend Data (Raw Values)",
+)
 
-# --- Handle Feedrate dips (optional) ---
-if fill_dips and "Feedrate" in f["Tag_Name"].unique():
-    feed_df = f[f["Tag_Name"] == "Feedrate"].copy()
-    feed_df["Value_Cleaned"] = feed_df["Value"]
-    # Fill short 30-sec gaps where motor was running but feedrate dropped
-    feed_df["Gap"] = feed_df["Time"].diff().dt.total_seconds().fillna(0)
-    feed_df.loc[(feed_df["Gap"] < 90) & (feed_df["Value_Cleaned"] == 0), "Value_Cleaned"] = None
-    feed_df["Value_Cleaned"] = feed_df["Value_Cleaned"].interpolate()
-    f = pd.concat([f[f["Tag_Name"] != "Feedrate"], feed_df], ignore_index=True)
-    f["PlotValue"] = f["Value_Cleaned"].fillna(f["Value"])
-else:
-    f["PlotValue"] = f["Value"]
+fig.update_traces(mode="lines+markers" if show_markers else "lines")
+fig.update_layout(
+    xaxis_title="Time",
+    yaxis_title="Value (raw units)",
+    legend_title="Tag",
+    hovermode="x unified",
+)
 
-# --- Plot ---
-if not f.empty:
-    fig = px.line(
-        f,
-        x="Time",
-        y="PlotValue",
-        color="Tag_Name",
-        title="Trend Data (Raw Values)",
-        markers=show_markers,
-    )
-    fig.update_traces(connectgaps=True)
-    fig.update_layout(
-        xaxis_title="Time",
-        yaxis_title="Value (raw units)",
-        legend_title="Tag",
-        template="plotly_dark",
-        height=600,
-    )
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.warning("No data found for selected filters.")
+st.plotly_chart(fig, use_container_width=True)
 
-# --- Footer ---
-st.markdown("---")
-st.caption("Source: repo data • Last updated: " + datetime.now().strftime("%a %b %d %H:%M:%S %Y"))
+# ---------- DATA PREVIEW ----------
+st.subheader("Data Preview")
+st.dataframe(filtered.head(50))
