@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 # PAGE CONFIGURATION
 # ======================================
 st.set_page_config(
-    page_title="RTA Tag Trends",
+    page_title="Tag Trends",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -105,9 +105,7 @@ elif selected_tags:
         "#3498DB", "#2ECC71"
     ]
 
-    yaxes_config = {}  # collect axis definitions
-
-    # Add traces and build axis configs
+    # Add traces
     for i, tag in enumerate(selected_tags):
         sub = df_filtered[df_filtered["Tag"] == tag]
         if sub.empty:
@@ -132,7 +130,9 @@ elif selected_tags:
         # axis position
         side = "right" if i % 2 else "left"
         offset = (i // 2) * 70
-        yaxes_config[f"yaxis{i+1}"] = dict(
+        axis_name = f"yaxis{i+1}"
+
+        fig.layout[axis_name] = dict(
             title=tag,
             titlefont=dict(size=10, color=color),
             tickfont=dict(size=9, color=color),
@@ -145,9 +145,6 @@ elif selected_tags:
             zeroline=True
         )
         fig.data[i].yaxis = f"y{i+1}"
-
-    # ✅ Apply all Y-axes at once
-    fig.update_layout(**yaxes_config)
 
     # Final layout
     fig.update_layout(
