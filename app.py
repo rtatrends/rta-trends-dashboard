@@ -17,13 +17,18 @@ def load_data():
     last_error = None
     for enc in encodings:
         try:
-            df = pd.read_csv(DATA_URL, encoding=enc)
+            df = pd.read_csv(
+                DATA_URL,
+                encoding=enc,
+                on_bad_lines="skip",  # Skip malformed rows
+                engine="python"       # Use tolerant parser
+            )
             break
         except Exception as e:
             last_error = e
             continue
     else:
-        st.error(f"Could not read CSV file. Last error: {last_error}")
+        st.error(f"❌ Could not read CSV file. Last error: {last_error}")
         st.stop()
 
     time_cols = [c for c in df.columns if "time" in c.lower()]
