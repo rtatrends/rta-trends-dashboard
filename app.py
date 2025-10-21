@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-# ===================================
-# PAGE CONFIG
-# ===================================
+# ------------------------------------
+# CONFIG
+# ------------------------------------
 st.set_page_config(
     page_title="RTA Tag Trends",
     page_icon="📈",
@@ -14,9 +14,9 @@ st.set_page_config(
 
 DATA_URL = "https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv"
 
-# ===================================
+# ------------------------------------
 # LOAD DATA
-# ===================================
+# ------------------------------------
 @st.cache_data
 def load_data():
     encodings = ["utf-16", "utf-16-le", "utf-16-be", "utf-8", "latin1"]
@@ -55,9 +55,9 @@ def load_data():
 
 df = load_data()
 
-# ===================================
+# ------------------------------------
 # TIME FILTER
-# ===================================
+# ------------------------------------
 st.sidebar.header("⏱ Time Range")
 min_time = df["Timestamp"].min()
 max_time = df["Timestamp"].max()
@@ -77,17 +77,21 @@ else:
         | (df["Timestamp"].dt.time <= end_time)
     ]
 
-# ===================================
+# ------------------------------------
 # MAIN SECTION
-# ===================================
-st.title("📊 Tag Trends (Independent Y-Axes, Feedrate Corrected)")
+# ------------------------------------
+st.title("📊 Tag Trends")
 st.markdown(
-    "Each selected tag is plotted with its own Y-axis. Feedrate tags are automatically scaled down ×0.001 for clarity."
+    "Each selected tag is plotted with its own Y-axis. "
+    "Feedrate-type tags are automatically scaled ×0.001 for clarity."
 )
 
 available_tags = sorted(df["Tag"].unique().tolist())
 selected_tags = st.multiselect(
-    "Select Tags to Display", available_tags, default=available_tags[:4], max_selections=10
+    "Select Tags to Display",
+    available_tags,
+    default=available_tags[:4],
+    max_selections=10,
 )
 
 if df_filtered.empty:
@@ -95,31 +99,21 @@ if df_filtered.empty:
 elif selected_tags:
     fig = go.Figure()
     colors = [
-        "#FF6B6B",
-        "#4ECDC4",
-        "#FFD93D",
-        "#1A73E8",
-        "#9C27B0",
-        "#00BFA6",
-        "#F39C12",
-        "#E74C3C",
-        "#3498DB",
-        "#2ECC71",
+        "#FF6B6B", "#4ECDC4", "#FFD93D", "#1A73E8",
+        "#9C27B0", "#00BFA6", "#F39C12", "#E74C3C",
+        "#3498DB", "#2ECC71"
     ]
 
-    # Plot each tag
+    yaxes_config = {}
+
+    # Build traces
     for i, tag in enumerate(selected_tags):
         sub = df_filtered[df_filtered["Tag"] == tag]
         if sub.empty:
             continue
 
-        # Specific Feedrate Fix
         tag_lower = tag.lower()
-        if "feedrate" in tag_lower or "tph" in tag_lower or "rate" in tag_lower:
-            scale_factor = 0.001
-        else:
-            scale_factor = 1
-
+        scale_factor = 0.001 if any(k in tag_lower for k in ["feedrate", "tph", "rate"]) else 1
         sub["ScaledValue"] = sub["Value"] * scale_factor
 
         color = colors[i % len(colors)]
@@ -134,49 +128,22 @@ elif selected_tags:
             )
         )
 
-        # Add independent y-axis safely
+        # Prepare axis definition (defer adding until after loop)
         side = "right" if i % 2 else "left"
         offset = (i // 2) * 70
-        fig.update_layout(
-            {f"yaxis{i+1}": dict(
-                title=tag,
-                titlefont=dict(size=10, color=color),
-                tickfont=dict(size=9, color=color),
-                overlaying="y" if i > 0 else None,
-                side=side,
-                anchor="free",
-                position=1.0 - (offset / 1000) if side == "right" else (offset / 1000),
-                rangemode="tozero",
-                showgrid=False,
-                zeroline=True,
-            )}
+        yaxes_config[f"yaxis{i+1}"] = dict(
+            title=tag,
+            titlefont=dict(size=10, color=color),
+            tickfont=dict(size=9, color=color),
+            overlaying="y" if i > 0 else None,
+            side=side,
+            anchor="free",
+            position=1.0 - (offset / 1000) if side == "right" else (offset / 1000),
+            rangemode="tozero",
+            showgrid=False,
+            zeroline=True,
         )
         fig.data[i].yaxis = f"y{i+1}"
 
-    # Final layout
-    fig.update_layout(
-        template="plotly_dark",
-        height=750,
-        margin=dict(l=80, r=150, t=80, b=60),
-        hovermode="x unified",
-        xaxis_title="Timestamp",
-        legend=dict(
-            orientation="h", y=-0.25, font=dict(size=10), bgcolor="rgba(0,0,0,0)"
-        ),
-        title=dict(
-            text="📈 Tag Trends (Independent Scales with Feedrate Fix)",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=22, color="#FFFFFF"),
-        ),
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Select one or more tags to view their trends.")
-
-# ===================================
-# RAW DATA VIEW
-# ===================================
-with st.expander("View Raw Data"):
-    st.dataframe(df_filtered)
+    # Apply all axes at once
+    fig.update_layout(yaxes_conf
