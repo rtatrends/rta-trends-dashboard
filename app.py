@@ -3,16 +3,11 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import time
 
-# -----------------------------
-# Streamlit Setup
-# -----------------------------
-st.set_page_config(page_title="Comco – Raw WF Daily Trends", layout="wide")
+st.set_page_config(page_title="Comco – WF Raw Daily Trends", layout="wide")
 st.title("Comco – RTA Daily Trends Dashboard (Raw Data)")
 st.caption("Plots unmodified Feedrate, Motor Current, Setpoint, and Load values directly from CSV.")
 
-# -----------------------------
-# Load Raw Data
-# -----------------------------
+# --- LOAD DATA ---
 @st.cache_data
 def load_data():
     try:
@@ -20,11 +15,22 @@ def load_data():
     except UnicodeError:
         df = pd.read_csv("WF with current data.csv", encoding="utf-8", on_bad_lines="skip")
 
-    df.columns = [c.strip() for c in df.columns]
-    if "Time" not in df.columns:
-        st.error("❌ 'Time' column not found.")
+    # Clean up column names
+    df.columns = [c.strip().replace("\n", " ").replace("\r", " ").replace("  ", " ") for c in df.columns]
+    df.columns = [c.replace(".", "_").replace("(", "").replace(")", "").replace("/", "_") for c in df.columns]
+
+    # Ensure Time column exists
+    time_col = None
+    for c in df.columns:
+        if "Time" in c or "Timestamp" in c or "Date" in c:
+            time_col = c
+            break
+
+    if not time_col:
+        st.error("❌ No timestamp column found. Please make sure your CSV has a Time column.")
         st.stop()
 
+    df.rename(columns={time_col: "Time"}, inplace=True)
     df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
     df = df.dropna(subset=["Time"])
     return df
@@ -32,36 +38,25 @@ def load_data():
 df = load_data()
 st.success(f"✅ Data loaded successfully ({len(df):,} rows).")
 
-# -----------------------------
-# Identify possible tags
-# -----------------------------
-feed_cols = [c for c in df.columns if "Feedrate" in c or "Feed_Rate" in c]
-motor_cols = [c for c in df.columns if "Motor" in c or "MOT" in c]
-setpoint_cols = [c for c in df.columns if "Setpoint" in c or "SP" in c]
-load_cols = [c for c in df.columns if "Load" in c or "Rolling" in c]
-
-# -----------------------------
-# Sidebar Filters
-# -----------------------------
+# --- FILTERS ---
 st.sidebar.header("Filters")
-
 start_time = st.sidebar.time_input("Start Time", value=time(0, 0))
 end_time = st.sidebar.time_input("End Time", value=time(23, 59))
 
-available_cols = [*feed_cols, *motor_cols, *setpoint_cols, *load_cols]
-selected_cols = st.sidebar.multiselect(
-    "Select Tags to Display", available_cols,
-    default=[c for c in available_cols if "Feedrate" in c or "Motor" in c]
-)
+# Allow all columns except Time for selection
+numeric_cols = [c for c in df.columns if c != "Time" and pd.api.types.is_numeric_dtype(df[c])]
+if not numeric_cols:
+    st.warning("⚠️ No numeric columns found for plotting.")
+    st.stop()
+
+selected_cols = st.sidebar.multiselect("Select Tags to Display", numeric_cols, default=numeric_cols[:3])
 
 filtered = df[
     (df["Time"].dt.time >= start_time) &
     (df["Time"].dt.time <= end_time)
 ]
 
-# -----------------------------
-# Plot Multi-Axis Chart
-# -----------------------------
+# --- PLOT ---
 st.subheader("Raw Trend Data (Continuous Lines with Independent Scales)")
 
 if filtered.empty or not selected_cols:
@@ -77,18 +72,17 @@ for i, col in enumerate(selected_cols):
         y=filtered[col],
         mode="lines",
         name=col,
-        line=dict(width=1.8),
+        line=dict(width=1.5),
         connectgaps=True,
         yaxis=axis_name
     ))
 
-    # Configure y-axis (overlaying each one)
     if i == 0:
-        fig.update_layout(yaxis=dict(title=f"{col}", showgrid=True))
+        fig.update_layout(yaxis=dict(title=col, showgrid=True))
     else:
         fig.update_layout({
             f"yaxis{i+1}": dict(
-                title=f"{col}",
+                title=col,
                 overlaying="y",
                 side="right",
                 position=1 - (i * 0.05),
@@ -106,8 +100,5 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# -----------------------------
-# Data Preview
-# -----------------------------
 with st.expander("🔍 Data Preview"):
-    st.dataframe(filtered[selected_cols + ["Time"]].head(100))
+    st.dataframe(filtered[["Time"] + selected_cols].head(100))
