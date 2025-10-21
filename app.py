@@ -64,10 +64,18 @@ max_time = df["Timestamp"].max()
 start_time = st.sidebar.time_input("Start Time", min_time.time())
 end_time = st.sidebar.time_input("End Time", max_time.time())
 
-df_filtered = df[
-    (df["Timestamp"].dt.time >= start_time) &
-    (df["Timestamp"].dt.time <= end_time)
-]
+# Handle time wrap-around (e.g. 23:00 -> 01:00 next day)
+if start_time < end_time:
+    df_filtered = df[
+        (df["Timestamp"].dt.time >= start_time)
+        & (df["Timestamp"].dt.time <= end_time)
+    ]
+else:
+    # covers both late-night and early-morning ranges
+    df_filtered = df[
+        (df["Timestamp"].dt.time >= start_time)
+        | (df["Timestamp"].dt.time <= end_time)
+    ]
 
 # ==============================
 # MAIN SECTION
@@ -82,7 +90,9 @@ selected_tags = st.multiselect(
     "Select Tags to Display", available_tags, default=available_tags[:4], max_selections=10
 )
 
-if selected_tags:
+if df_filtered.empty:
+    st.warning("⚠️ No data found for this time range. Try adjusting Start/End times.")
+elif selected_tags:
     fig = go.Figure()
     colors = [
         "#FF6B6B", "#4ECDC4", "#FFD93D", "#1A73E8",
@@ -112,13 +122,11 @@ if selected_tags:
             )
         )
 
-    # Add y-axes safely (no dict expansion)
+    # Add independent y-axes safely
     for i, trace in enumerate(fig.data):
         side = "right" if i % 2 else "left"
         offset = (i // 2) * 70
-        yaxis_name = f"yaxis{i+1}"
-
-        fig.layout[yaxis_name] = dict(
+        fig.layout[f"yaxis{i+1}"] = dict(
             title=trace.name,
             titlefont=dict(size=10, color=trace.line.color),
             tickfont=dict(size=9, color=trace.line.color),
@@ -131,3 +139,33 @@ if selected_tags:
             zeroline=True,
         )
         trace.yaxis = f"y{i+1}"
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=750,
+        margin=dict(l=80, r=150, t=80, b=60),
+        hovermode="x unified",
+        xaxis_title="Timestamp",
+        legend=dict(
+            orientation="h",
+            y=-0.25,
+            font=dict(size=10),
+            bgcolor="rgba(0,0,0,0)"
+        ),
+        title=dict(
+            text="📈 Tag Trends (Independent Scales, Feedrate Corrected)",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=22, color="#FFFFFF")
+        ),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Select one or more tags to view their trends.")
+
+# ==============================
+# RAW DATA VIEW
+# ==============================
+with st.expander("View Raw Data"):
+    st.dataframe(df_filtered)
