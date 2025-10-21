@@ -1,13 +1,14 @@
-import os, io, time, requests
+import os, io, time, re, requests
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="Comco - RTA Trends Dashboard (Final v8)", layout="wide")
+st.set_page_config(page_title="Comco - RTA Trends Dashboard", layout="wide")
 
 RAW_CSV_URL = os.environ.get("RAW_CSV_URL", "").strip()
-LOCAL_CSV = "Last_30_Day_Data_Group_45.csv"   # master file
+LOCAL_CSV = "Last_30_Day_Data_Group_45.csv"
 
 @st.cache_data(show_spinner=True, ttl=300)
 def load_data(raw_url: str, local_path: str):
@@ -21,92 +22,92 @@ def load_data(raw_url: str, local_path: str):
         df = pd.read_csv(local_path, parse_dates=["Time"])
         source = "local (repo file)"
         updated = time.ctime(os.path.getmtime(local_path)) if os.path.exists(local_path) else "unknown"
-
-    if "Value" in df.columns:
-        df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
-    df = df.dropna(subset=["Time", "Value"]).sort_values("Time").reset_index(drop=True)
+    df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
+    df.dropna(subset=["Time", "Value"], inplace=True)
+    df.sort_values("Time", inplace=True)
     return df, source, updated
-
 
 df, data_source, last_updated = load_data(RAW_CSV_URL, LOCAL_CSV)
 
-if df.empty:
-    st.error("CSV is empty or missing required columns.")
-    st.stop()
+st.title("Comco - RTA Trends Dashboard")
+st.caption(f"Source: {data_source} • Last updated: {last_updated}")
+st.markdown("Raw historian values — fully synchronized across panels.")
 
-# Sidebar filters
-st.sidebar.title("Filters")
-
+# --- Sidebar Filters ---
+st.sidebar.header("Filters")
 min_date, max_date = df["Time"].min().date(), df["Time"].max().date()
-date_range = st.sidebar.date_input("Date range", (min_date, max_date))
-
+date_range = st.sidebar.date_input("Date Range", (min_date, max_date))
 col1, col2 = st.sidebar.columns(2)
-start_t = col1.time_input("Start Time", pd.Timestamp("00:00").time())
-end_t   = col2.time_input("End Time", pd.Timestamp("23:59").time())
+start_t = col1.time_input("Start", pd.Timestamp("00:00").time())
+end_t = col2.time_input("End", pd.Timestamp("23:59").time())
 
-groups = sorted(df.get("Tag_Group", pd.Series(dtype=str)).dropna().unique())
-equipments = sorted(df.get("Equipment", pd.Series(dtype=str)).dropna().unique())
-tags = sorted(df.get("Tag_Name", pd.Series(dtype=str)).dropna().unique())
-
-sel_group = st.sidebar.multiselect("Tag Group", groups, default=groups)
-sel_equip = st.sidebar.multiselect("Equipment", equipments, default=equipments[:4])
-sel_tags  = st.sidebar.multiselect("Tag(s)", tags, default=["Feedrate","Setpoint","Load","Belt_Speed"])
-quality_ok_only = st.sidebar.checkbox("Quality = Good only", value=False)
-show_markers = st.sidebar.checkbox("Show markers", value=False)
-abs_feed = st.sidebar.checkbox("Show absolute Feedrate", value=True)
-
-# Filter
 if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
     start_dt = pd.Timestamp.combine(date_range[0], start_t)
-    end_dt   = pd.Timestamp.combine(date_range[1], end_t)
+    end_dt = pd.Timestamp.combine(date_range[1], end_t)
 else:
-    single_date = date_range if not isinstance(date_range, (tuple, list)) else date_range[0]
-    start_dt = pd.Timestamp.combine(single_date, start_t)
-    end_dt   = pd.Timestamp.combine(single_date, end_t)
+    d = date_range if not isinstance(date_range, (tuple, list)) else date_range[0]
+    start_dt = pd.Timestamp.combine(d, start_t)
+    end_dt = pd.Timestamp.combine(d, end_t)
 
 mask = (df["Time"] >= start_dt) & (df["Time"] <= end_dt)
-if sel_group: mask &= df["Tag_Group"].isin(sel_group)
-if sel_equip: mask &= df["Equipment"].isin(sel_equip)
-if sel_tags:  mask &= df["Tag_Name"].isin(sel_tags)
-if quality_ok_only and "Quality" in df.columns:
-    mask &= df["Quality"].eq("Good")
+f = df.loc[mask].copy()
 
-f = df.loc[mask, ["Time","Equipment","Tag_Name","Value","Tag_Group","Quality"]].copy()
-if abs_feed:
-    f.loc[f["Tag_Name"].str.lower() == "feedrate","Value"] = f.loc[f["Tag_Name"].str.lower() == "feedrate","Value"].abs()
+# --- Auto Tag Derivation ---
+def extract_tag(name):
+    n = str(name).upper()
+    if "FEEDRATE" in n: return "Feedrate"
+    if "SETPOINT" in n: return "Setpoint"
+    if "LOAD" in n: return "Load"
+    if "SPEED" in n: return "Belt_Speed"
+    if "CURRENT" in n: return "Motor_Current"
+    if "FLOW" in n: return "Flow"
+    if "GATE" in n: return "Gate_Pos_CMD"
+    if "TOTAL" in n: return "Totalizer"
+    return "Other"
 
-# Plot
-st.title("Comco - RTA Trends Dashboard (Final v8)")
-st.caption(f"Source: {data_source} • Last updated: {last_updated}")
-st.markdown("Auto Y-axis scaling like FactoryTalk — just click, zoom, or drag to rescale.")
+if "Tag_Name" not in f.columns:
+    f["Tag_Name"] = f["Name"].apply(extract_tag)
 
 COLOR_MAP = {
-    "Feedrate":"#1f77b4", "Setpoint":"#ff7f0e", "Load":"#d62728",
-    "Belt_Speed":"#2ca02c", "Motor_Current":"#17becf",
-    "Rolling_Avg":"#9467bd", "Totalizer":"#e377c2"
+    "Feedrate":"#1f77b4","Setpoint":"#ff7f0e","Load":"#d62728","Belt_Speed":"#2ca02c",
+    "Motor_Current":"#17becf","Flow":"#9467bd","Gate_Pos_CMD":"#8c564b","Totalizer":"#e377c2"
 }
 
-def add_traces(fig, frame):
-    if frame.empty:
-        st.warning("No data for selected filters.")
-        return fig
-    for (tag, equip), seg in frame.groupby(["Tag_Name","Equipment"]):
-        color = COLOR_MAP.get(tag, "#cccccc")
-        fig.add_trace(go.Scatter(
-            x=seg["Time"], y=seg["Value"], mode="lines+markers" if show_markers else "lines",
-            name=f"{equip} • {tag}", line=dict(width=1.5, color=color),
-            marker=dict(size=3),
-            hovertemplate="<b>%{customdata[0]}</b><br>Tag: %{customdata[1]}<br>Time: %{x|%Y-%m-%d %H:%M:%S}<br>Value: %{y:.2f}<extra></extra>",
-            customdata=np.stack([seg["Equipment"], seg["Tag_Name"]], axis=-1)
-        ))
-    fig.update_layout(
-        template="plotly_dark", hovermode="x unified", height=680,
-        xaxis=dict(title="Time"),
-        yaxis=dict(title="Value (auto-scale)", autorange=True),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-    )
-    return fig
+# --- Build synchronized multi-panel layout ---
+fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.04)
 
-fig = add_traces(go.Figure(), f)
+line_mode = "lines"
+for (tag, equip), seg in f.groupby(["Tag_Name","Name"]):
+    color = COLOR_MAP.get(tag, "#aaa")
+    if tag in ["Feedrate","Setpoint","Load","Belt_Speed","Totalizer"]:
+        fig.add_trace(go.Scatter(x=seg["Time"], y=seg["Value"], mode=line_mode,
+                                 name=f"{equip} • {tag}", line=dict(color=color, width=1.5)),
+                      row=1, col=1)
+    elif "CURRENT" in tag:
+        fig.add_trace(go.Scatter(x=seg["Time"], y=seg["Value"], mode=line_mode,
+                                 name=f"{equip} • {tag}", line=dict(color=color, width=1.5)),
+                      row=2, col=1)
+    elif tag in ["Flow","Gate_Pos_CMD","Totalizer"]:
+        fig.add_trace(go.Scatter(x=seg["Time"], y=seg["Value"], mode=line_mode,
+                                 name=f"{equip} • {tag}", line=dict(color=color, width=1.5)),
+                      row=3, col=1)
+    else:
+        fig.add_trace(go.Scatter(x=seg["Time"], y=seg["Value"], mode=line_mode,
+                                 name=f"{equip} • {tag}", line=dict(color=color, width=1.2)),
+                      row=4, col=1)
+
+# --- Axis settings ---
+fig.update_layout(
+    template="plotly_dark",
+    height=1100,
+    hovermode="x unified",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    margin=dict(t=60, l=60, r=40, b=40),
+)
+
+for i in range(1,5):
+    fig.update_yaxes(autorange=True, matches=None, title_text=f"Panel {i} Value", row=i, col=1)
+    fig.update_xaxes(title_text="Time", row=i, col=1, showspikes=True, spikemode="across")
+
 st.plotly_chart(fig, use_container_width=True)
-st.dataframe(f.head(1000), use_container_width=True)
+st.dataframe(f.head(500))
