@@ -2,21 +2,21 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-# ------------------------------------
-# CONFIG
-# ------------------------------------
+# ======================================
+# PAGE CONFIGURATION
+# ======================================
 st.set_page_config(
     page_title="RTA Tag Trends",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
 DATA_URL = "https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv"
 
-# ------------------------------------
+# ======================================
 # LOAD DATA
-# ------------------------------------
+# ======================================
 @st.cache_data
 def load_data():
     encodings = ["utf-16", "utf-16-le", "utf-16-be", "utf-8", "latin1"]
@@ -28,20 +28,21 @@ def load_data():
                 break
         except Exception:
             continue
+
     if df is None:
-        st.error("❌ Unable to decode CSV file.")
+        st.error("❌ Could not decode CSV file.")
         st.stop()
 
     df.columns = [c.strip().lower() for c in df.columns]
-    col_name = next((c for c in df.columns if "tag" in c or "name" in c), None)
-    col_value = next((c for c in df.columns if "value" in c), None)
+    col_tag = next((c for c in df.columns if "tag" in c or "name" in c), None)
+    col_val = next((c for c in df.columns if "value" in c), None)
     col_time = next((c for c in df.columns if "time" in c), None)
 
-    if not all([col_name, col_value]):
+    if not all([col_tag, col_val]):
         st.error(f"❌ Missing required columns (tag/value). Found: {df.columns.tolist()}")
         st.stop()
 
-    df.rename(columns={col_name: "Tag", col_value: "Value"}, inplace=True)
+    df.rename(columns={col_tag: "Tag", col_val: "Value"}, inplace=True)
     if col_time:
         df.rename(columns={col_time: "Timestamp"}, inplace=True)
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
@@ -55,9 +56,9 @@ def load_data():
 
 df = load_data()
 
-# ------------------------------------
+# ======================================
 # TIME FILTER
-# ------------------------------------
+# ======================================
 st.sidebar.header("⏱ Time Range")
 min_time = df["Timestamp"].min()
 max_time = df["Timestamp"].max()
@@ -77,25 +78,25 @@ else:
         | (df["Timestamp"].dt.time <= end_time)
     ]
 
-# ------------------------------------
-# MAIN SECTION
-# ------------------------------------
+# ======================================
+# MAIN APP
+# ======================================
 st.title("📊 Tag Trends")
 st.markdown(
-    "Each selected tag is plotted with its own Y-axis. "
-    "Feedrate-type tags are automatically scaled ×0.001 for clarity."
+    "Each selected tag is plotted with its own Y-axis scale. "
+    "**Feedrate-type tags (Feedrate, TPH, Rate)** are automatically scaled ×0.001."
 )
 
 available_tags = sorted(df["Tag"].unique().tolist())
 selected_tags = st.multiselect(
     "Select Tags to Display",
     available_tags,
-    default=available_tags[:4],
-    max_selections=10,
+    default=available_tags[:3],
+    max_selections=10
 )
 
 if df_filtered.empty:
-    st.warning("⚠️ No data found for this time range. Adjust Start/End times.")
+    st.warning("⚠️ No data found for this time range. Try adjusting Start/End times.")
 elif selected_tags:
     fig = go.Figure()
     colors = [
@@ -104,9 +105,9 @@ elif selected_tags:
         "#3498DB", "#2ECC71"
     ]
 
-    yaxes_config = {}
+    yaxes_config = {}  # collect axis definitions
 
-    # Build traces
+    # Add traces and build axis configs
     for i, tag in enumerate(selected_tags):
         sub = df_filtered[df_filtered["Tag"] == tag]
         if sub.empty:
@@ -124,11 +125,11 @@ elif selected_tags:
                 name=f"{tag}{' (×0.001)' if scale_factor != 1 else ''}",
                 mode="lines",
                 line=dict(width=2, color=color),
-                hovertemplate="%{x}<br><b>%{y:.2f}</b><extra>%{fullData.name}</extra>",
+                hovertemplate="%{x}<br><b>%{y:.2f}</b><extra>%{fullData.name}</extra>"
             )
         )
 
-        # Prepare axis definition (defer adding until after loop)
+        # axis position
         side = "right" if i % 2 else "left"
         offset = (i // 2) * 70
         yaxes_config[f"yaxis{i+1}"] = dict(
@@ -141,9 +142,40 @@ elif selected_tags:
             position=1.0 - (offset / 1000) if side == "right" else (offset / 1000),
             rangemode="tozero",
             showgrid=False,
-            zeroline=True,
+            zeroline=True
         )
         fig.data[i].yaxis = f"y{i+1}"
 
-    # Apply all axes at once
-    fig.update_layout(yaxes_conf
+    # ✅ Apply all Y-axes at once
+    fig.update_layout(**yaxes_config)
+
+    # Final layout
+    fig.update_layout(
+        template="plotly_dark",
+        height=750,
+        margin=dict(l=80, r=150, t=80, b=60),
+        hovermode="x unified",
+        xaxis_title="Timestamp",
+        legend=dict(
+            orientation="h",
+            y=-0.25,
+            font=dict(size=10),
+            bgcolor="rgba(0,0,0,0)"
+        ),
+        title=dict(
+            text="📈 Tag Trends (Independent Scales, Feedrate Corrected)",
+            x=0.5,
+            xanchor="center",
+            font=dict(size=22, color="#FFFFFF")
+        )
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Select one or more tags to view their trends.")
+
+# ======================================
+# RAW DATA VIEW
+# ======================================
+with st.expander("View Raw Data"):
+    st.dataframe(df_filtered)
