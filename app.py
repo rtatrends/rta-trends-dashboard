@@ -1,132 +1,94 @@
-# =============================================================
-# COMCO - RTA TRENDS DASHBOARD (FT-Style Multi-Panel View)
-# =============================================================
-
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime
+import plotly.express as px
+from datetime import datetime, time
 
+# ---------- CONFIG ----------
 st.set_page_config(page_title="Comco - RTA Trends Dashboard", layout="wide")
 
-# ------------------------------
-# Data Loader
-# ------------------------------
+DATA_PATH = "Last_30_Day_Data_Group_45.csv"  # <-- file in your repo root
+
+# ---------- LOAD DATA ----------
 @st.cache_data
-def load_data(file):
-    df = pd.read_csv(file, parse_dates=['Time'])
-    df.columns = [c.strip().title() for c in df.columns]
-    df = df.rename(columns={"Taggroup": "Tag_Group", "Tagname": "Tag_Name"})
-    df = df.dropna(subset=['Time', 'Value'])
-    df = df.sort_values('Time')
-    return df
+def load_data():
+    try:
+        df = pd.read_csv(DATA_PATH, parse_dates=["Time"])
+        df["Tag_Name"] = df["Tag_Name"].astype(str).str.strip()
+        df["Equipment"] = df["Equipment"].astype(str).str.strip()
+        df["Tag_Group"] = df["Tag_Group"].astype(str).str.strip()
+        df.sort_values("Time", inplace=True)
+        return df
+    except Exception as e:
+        st.error(f"❌ Failed to load data: {e}")
+        return pd.DataFrame()
 
-# ------------------------------
-# Sidebar - Upload
-# ------------------------------
-st.sidebar.title("📂 Data Source")
-uploaded = st.sidebar.file_uploader("Upload FactoryData CSV", type=["csv"])
-if uploaded is None:
-    st.warning("Please upload FactoryData_Clean_30Day.csv or Small.csv to continue.")
+df = load_data()
+if df.empty:
     st.stop()
 
-f = load_data(uploaded)
-st.sidebar.success("✅ File uploaded and loaded successfully!")
+# ---------- SIDEBAR FILTERS ----------
+st.sidebar.header("Filters")
 
-# ------------------------------
-# Filters
-# ------------------------------
-st.sidebar.header("🔍 Filters")
-min_date, max_date = f["Time"].min(), f["Time"].max()
-date_range = st.sidebar.date_input("Date Range", [min_date, max_date])
-start_time = st.sidebar.time_input("Start", datetime.min.time())
-end_time = st.sidebar.time_input("End", datetime.max.time())
+min_date = df["Time"].min().date()
+max_date = df["Time"].max().date()
+date_range = st.sidebar.date_input("Date range", [min_date, max_date])
 
-# Time filter
-f = f[(f["Time"].dt.date >= date_range[0]) & (f["Time"].dt.date <= date_range[1])]
-f = f[(f["Time"].dt.time >= start_time) & (f["Time"].dt.time <= end_time)]
+start_time = st.sidebar.time_input("Start", time(0, 0))
+end_time = st.sidebar.time_input("End", time(23, 59))
 
-# Tag filter
-tags = sorted(f["Tag_Name"].unique())
-selected_tags = st.sidebar.multiselect("Select Tags", tags, default=["Feedrate", "Setpoint", "Motor_Current"])
+tags = st.sidebar.multiselect("Select Tags", sorted(df["Tag_Name"].unique()), ["Feedrate"])
+filter_name = st.sidebar.text_input("Filter by name or equipment")
 
-# Equipment filter
-equipments = sorted(f["Equipment"].dropna().unique()) if "Equipment" in f.columns else []
-selected_equip = st.sidebar.multiselect("Select Equipment", equipments, default=equipments)
+quality_good = st.sidebar.checkbox("Quality = Good only", False)
+fill_feedrate = st.sidebar.checkbox("Use cleaned Feedrate (fill false dips)", False)
+show_markers = st.sidebar.checkbox("Markers", False)
 
-f = f[f["Tag_Name"].isin(selected_tags)]
-if selected_equip:
-    f = f[f["Equipment"].isin(selected_equip)]
+# ---------- FILTERING ----------
+mask = (df["Time"].dt.date >= date_range[0]) & (df["Time"].dt.date <= date_range[-1])
+mask &= (df["Time"].dt.time >= start_time) & (df["Time"].dt.time <= end_time)
+if tags:
+    mask &= df["Tag_Name"].isin(tags)
+if filter_name:
+    mask &= df["Equipment"].str.contains(filter_name, case=False, na=False)
+if quality_good and "Quality" in df.columns:
+    mask &= df["Quality"].astype(str).str.contains("Good", case=False, na=False)
 
-if f.empty:
-    st.warning("No data for selected filters.")
+filtered = df.loc[mask].copy()
+if filtered.empty:
+    st.warning("No matching data for selected filters.")
     st.stop()
 
-# ------------------------------
-# Create Panels (FT-style)
-# ------------------------------
-st.title("Comco - RTA Trends Dashboard")
-st.markdown("**FactoryTalk-style synchronized trend panels (Feedrate, Setpoint, Motor Current)**")
+if fill_feedrate and "Feedrate" in tags:
+    filtered["Value"] = filtered.groupby("Equipment")["Value"].transform(
+        lambda s: s.ffill(limit=10)
+    )
 
-# Create one shared x-axis
-fig = go.Figure()
-
-colors = {
-    "Feedrate": "#1f77b4",
-    "Setpoint": "#ff7f0e",
-    "Motor_Current": "#2ca02c"
-}
-
-# Panel 1: Feedrate
-for eq in f["Equipment"].unique():
-    df_eq = f[(f["Equipment"] == eq) & (f["Tag_Name"] == "Feedrate")]
-    if not df_eq.empty:
-        fig.add_trace(go.Scatter(
-            x=df_eq["Time"], y=df_eq["Value"],
-            name=f"{eq} Feedrate", line=dict(color=colors["Feedrate"], width=1.6),
-            yaxis="y1"
-        ))
-
-# Panel 2: Setpoint
-for eq in f["Equipment"].unique():
-    df_eq = f[(f["Equipment"] == eq) & (f["Tag_Name"] == "Setpoint")]
-    if not df_eq.empty:
-        fig.add_trace(go.Scatter(
-            x=df_eq["Time"], y=df_eq["Value"],
-            name=f"{eq} Setpoint", line=dict(color=colors["Setpoint"], width=1.3, dash="dot"),
-            yaxis="y2"
-        ))
-
-# Panel 3: Motor Current
-for eq in f["Equipment"].unique():
-    df_eq = f[(f["Equipment"] == eq) & (f["Tag_Name"] == "Motor_Current")]
-    if not df_eq.empty:
-        fig.add_trace(go.Scatter(
-            x=df_eq["Time"], y=df_eq["Value"],
-            name=f"{eq} Motor Current", line=dict(color=colors["Motor_Current"], width=1.3, dash="dash"),
-            yaxis="y3"
-        ))
-
-# Layout — 3 stacked synchronized panels
+# ---------- PLOT ----------
+fig = px.line(
+    filtered,
+    x="Time",
+    y="Value",
+    color="Tag_Name",
+    line_shape="linear",
+    title="Trend Data (Raw Values)",
+    markers=show_markers,
+)
 fig.update_layout(
-    height=900,
-    xaxis=dict(domain=[0, 1]),
-    yaxis=dict(title="Feedrate", domain=[0.66, 1.0]),
-    yaxis2=dict(title="Setpoint", domain=[0.33, 0.65]),
-    yaxis3=dict(title="Motor Current", domain=[0.0, 0.32]),
-    legend=dict(orientation="h", y=-0.2),
+    height=650,
+    xaxis_title="Time",
+    yaxis_title="Value (raw units)",
+    legend_title="Tag",
     hovermode="x unified",
-    template="plotly_dark",
-    title="RTA Trends (Feedrate, Setpoint, Current) — Time Synchronized",
 )
 
+st.title("Comco - RTA Trends Dashboard")
+st.caption(f"Source: repo data • Last updated: {datetime.now().strftime('%a %b %d %H:%M:%S %Y')}")
 st.plotly_chart(fig, use_container_width=True)
 
-# ------------------------------
-# Data Preview + Download
-# ------------------------------
-st.subheader("📋 Data Preview")
-st.dataframe(f.tail(20))
+# ---------- DATA PREVIEW ----------
+with st.expander("📊 Data Preview"):
+    st.dataframe(filtered.tail(200))
 
-csv = f.to_csv(index=False).encode("utf-8")
-st.download_button("⬇️ Download Filtered Data", csv, "Filtered_Data.csv", "text/csv")
+# ---------- FOOTER ----------
+st.markdown("---")
+st.caption("FactoryTalk-style synchronized trends • Raw + Optional cleaned Feedrate.")
