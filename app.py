@@ -98,7 +98,6 @@ elif selected_tags:
         sub["ScaledValue"] = sub["Value"] * scale_factor
 
         color = colors[i % len(colors)]
-        axis_name = f"y{i+1}"
         side = "right" if i % 2 else "left"
 
         fig.add_trace(
@@ -108,22 +107,23 @@ elif selected_tags:
                 name=f"{tag}{' (×0.001)' if scale_factor != 1 else ''}",
                 mode="lines",
                 line=dict(width=2, color=color),
-                yaxis=axis_name,
+                yaxis=f"y{i+1}",
             )
         )
 
-        fig.update_yaxes(
-            title_text=tag,
-            titlefont=dict(color=color, size=10),
-            tickfont=dict(color=color, size=9),
-            side=side,
-            overlaying="y" if i > 0 else None,
-            rangemode="tozero",
-            showgrid=False,
-            zeroline=True,
-            anchor="free",
-            position=(0.05 * i) if side == "left" else (1 - 0.05 * i)
-        )
+        # define y-axis safely (no position param)
+        fig.update_layout({
+            f"yaxis{i+1}": dict(
+                title=tag,
+                titlefont=dict(color=color, size=10),
+                tickfont=dict(color=color, size=9),
+                side=side,
+                overlaying="y" if i > 0 else None,
+                rangemode="tozero",
+                showgrid=False,
+                zeroline=True,
+            )
+        })
 
     fig.update_layout(
         template="plotly_dark",
@@ -132,7 +132,7 @@ elif selected_tags:
         hovermode="x unified",
         xaxis_title="Timestamp",
         legend=dict(orientation="h", y=-0.25, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-        title=dict(text="📈 Tag Trends (Independent Y-Axes, Feedrate Corrected)", x=0.5, font=dict(size=22)),
+        title=dict(text="📊 Tag Trends", x=0.5, font=dict(size=22)),
     )
 
     st.plotly_chart(fig, use_container_width=True)
