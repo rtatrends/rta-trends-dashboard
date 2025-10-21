@@ -3,10 +3,10 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # ==============================
-# PAGE CONFIG
+# CONFIG
 # ==============================
 st.set_page_config(
-    page_title="RTA Tag Trends (Final)",
+    page_title="RTA Tag Trends (Final Stable)",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -15,12 +15,11 @@ st.set_page_config(
 DATA_URL = "https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv"
 
 # ==============================
-# LOAD DATA (robust UTF handling)
+# LOAD DATA SAFELY
 # ==============================
 @st.cache_data
 def load_data():
     encodings = ["utf-16", "utf-16-le", "utf-16-be", "utf-8", "latin1"]
-    df = None
     for enc in encodings:
         try:
             df = pd.read_csv(DATA_URL, encoding=enc, on_bad_lines="skip", engine="python")
@@ -28,7 +27,7 @@ def load_data():
                 break
         except Exception:
             continue
-    if df is None:
+    else:
         st.error("❌ Could not decode CSV file.")
         st.stop()
 
@@ -42,7 +41,6 @@ def load_data():
         st.stop()
 
     df.rename(columns={col_name: "Tag", col_value: "Value"}, inplace=True)
-
     if col_time:
         df.rename(columns={col_time: "Timestamp"}, inplace=True)
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
@@ -72,16 +70,16 @@ df_filtered = df[
 ]
 
 # ==============================
-# MAIN UI
+# MAIN SECTION
 # ==============================
-st.title("📊 Tag Trends (Independent Y-Axes, Auto-Scaled)")
+st.title("📊 Tag Trends (Independent Y-Axes, Feedrate Fixed)")
 st.markdown(
-    "Each selected tag is plotted with its own Y-axis scale — high-magnitude tags (e.g. Feedrate) are auto-scaled ×0.001."
+    "Each selected tag is plotted with its own Y-axis scale — high-magnitude tags (like Feedrate) are auto-scaled ×0.001 for visibility."
 )
 
 available_tags = sorted(df["Tag"].unique().tolist())
 selected_tags = st.multiselect(
-    "Select Tags", available_tags, default=available_tags[:3], max_selections=10
+    "Select Tags to Display", available_tags, default=available_tags[:4], max_selections=10
 )
 
 if selected_tags:
@@ -92,17 +90,16 @@ if selected_tags:
         "#3498DB", "#2ECC71"
     ]
 
-    yaxes_configs = {}
+    # Add traces
     for i, tag in enumerate(selected_tags):
         sub = df_filtered[df_filtered["Tag"] == tag]
         if sub.empty:
             continue
 
-        # Scale detection (e.g., feedrate)
+        # auto-scale large magnitude tags
         scale_factor = 0.001 if sub["Value"].max() > 50000 else 1
         sub["ScaledValue"] = sub["Value"] * scale_factor
 
-        # Create trace
         color = colors[i % len(colors)]
         fig.add_trace(
             go.Scatter(
@@ -115,13 +112,16 @@ if selected_tags:
             )
         )
 
-        # Configure safe y-axis
+    # Add y-axes safely (no dict expansion)
+    for i, trace in enumerate(fig.data):
         side = "right" if i % 2 else "left"
         offset = (i // 2) * 70
-        yaxes_configs[f"yaxis{i+1}"] = dict(
-            title=tag,
-            titlefont=dict(size=10, color=color),
-            tickfont=dict(size=9, color=color),
+        yaxis_name = f"yaxis{i+1}"
+
+        fig.layout[yaxis_name] = dict(
+            title=trace.name,
+            titlefont=dict(size=10, color=trace.line.color),
+            tickfont=dict(size=9, color=trace.line.color),
             overlaying="y" if i > 0 else None,
             side=side,
             anchor="free",
@@ -130,38 +130,4 @@ if selected_tags:
             showgrid=False,
             zeroline=True,
         )
-        fig.data[i].yaxis = f"y{i+1}"
-
-    # Apply all y-axis configs safely
-    fig.update_layout(**yaxes_configs)
-
-    # Final styling
-    fig.update_layout(
-        template="plotly_dark",
-        height=750,
-        margin=dict(l=80, r=120, t=80, b=60),
-        hovermode="x unified",
-        xaxis_title="Timestamp",
-        legend=dict(
-            orientation="h",
-            y=-0.25,
-            font=dict(size=10),
-            bgcolor="rgba(0,0,0,0)"
-        ),
-        title=dict(
-            text="📈 Tag Trends (Independent Scales, Feedrate Corrected)",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=22, color="#FFFFFF")
-        )
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Select one or more tags to view their trends.")
-
-# ==============================
-# RAW DATA VIEW
-# ==============================
-with st.expander("View Raw Data"):
-    st.dataframe(df_filtered)
+        trace.yaxis = f"y{i+1}"
