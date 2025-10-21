@@ -2,24 +2,25 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-# ==============================
-# CONFIG
-# ==============================
+# ===================================
+# PAGE CONFIG
+# ===================================
 st.set_page_config(
-    page_title="RTA Tag Trends (Final Stable)",
+    page_title="RTA Tag Trends",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 DATA_URL = "https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv"
 
-# ==============================
-# LOAD DATA SAFELY
-# ==============================
+# ===================================
+# LOAD DATA
+# ===================================
 @st.cache_data
 def load_data():
     encodings = ["utf-16", "utf-16-le", "utf-16-be", "utf-8", "latin1"]
+    df = None
     for enc in encodings:
         try:
             df = pd.read_csv(DATA_URL, encoding=enc, on_bad_lines="skip", engine="python")
@@ -27,8 +28,8 @@ def load_data():
                 break
         except Exception:
             continue
-    else:
-        st.error("❌ Could not decode CSV file.")
+    if df is None:
+        st.error("❌ Unable to decode CSV file.")
         st.stop()
 
     df.columns = [c.strip().lower() for c in df.columns]
@@ -54,9 +55,9 @@ def load_data():
 
 df = load_data()
 
-# ==============================
+# ===================================
 # TIME FILTER
-# ==============================
+# ===================================
 st.sidebar.header("⏱ Time Range")
 min_time = df["Timestamp"].min()
 max_time = df["Timestamp"].max()
@@ -64,25 +65,24 @@ max_time = df["Timestamp"].max()
 start_time = st.sidebar.time_input("Start Time", min_time.time())
 end_time = st.sidebar.time_input("End Time", max_time.time())
 
-# Handle time wrap-around (e.g. 23:00 -> 01:00 next day)
+# Handle midnight wrap-around
 if start_time < end_time:
     df_filtered = df[
         (df["Timestamp"].dt.time >= start_time)
         & (df["Timestamp"].dt.time <= end_time)
     ]
 else:
-    # covers both late-night and early-morning ranges
     df_filtered = df[
         (df["Timestamp"].dt.time >= start_time)
         | (df["Timestamp"].dt.time <= end_time)
     ]
 
-# ==============================
+# ===================================
 # MAIN SECTION
-# ==============================
-st.title("📊 Tag Trends (Independent Y-Axes, Feedrate Fixed)")
+# ===================================
+st.title("📊 Tag Trends (Independent Y-Axes, Feedrate Corrected)")
 st.markdown(
-    "Each selected tag is plotted with its own Y-axis scale — high-magnitude tags (like Feedrate) are auto-scaled ×0.001 for visibility."
+    "Each selected tag is plotted with its own Y-axis. Feedrate tags are automatically scaled down ×0.001 for clarity."
 )
 
 available_tags = sorted(df["Tag"].unique().tolist())
@@ -91,23 +91,35 @@ selected_tags = st.multiselect(
 )
 
 if df_filtered.empty:
-    st.warning("⚠️ No data found for this time range. Try adjusting Start/End times.")
+    st.warning("⚠️ No data found for this time range. Adjust Start/End times.")
 elif selected_tags:
     fig = go.Figure()
     colors = [
-        "#FF6B6B", "#4ECDC4", "#FFD93D", "#1A73E8",
-        "#9C27B0", "#00BFA6", "#F39C12", "#E74C3C",
-        "#3498DB", "#2ECC71"
+        "#FF6B6B",
+        "#4ECDC4",
+        "#FFD93D",
+        "#1A73E8",
+        "#9C27B0",
+        "#00BFA6",
+        "#F39C12",
+        "#E74C3C",
+        "#3498DB",
+        "#2ECC71",
     ]
 
-    # Add traces
+    # Plot each tag
     for i, tag in enumerate(selected_tags):
         sub = df_filtered[df_filtered["Tag"] == tag]
         if sub.empty:
             continue
 
-        # auto-scale large magnitude tags
-        scale_factor = 0.001 if sub["Value"].max() > 50000 else 1
+        # Specific Feedrate Fix
+        tag_lower = tag.lower()
+        if "feedrate" in tag_lower or "tph" in tag_lower or "rate" in tag_lower:
+            scale_factor = 0.001
+        else:
+            scale_factor = 1
+
         sub["ScaledValue"] = sub["Value"] * scale_factor
 
         color = colors[i % len(colors)]
@@ -122,24 +134,26 @@ elif selected_tags:
             )
         )
 
-    # Add independent y-axes safely
-    for i, trace in enumerate(fig.data):
+        # Add independent y-axis safely
         side = "right" if i % 2 else "left"
         offset = (i // 2) * 70
-        fig.layout[f"yaxis{i+1}"] = dict(
-            title=trace.name,
-            titlefont=dict(size=10, color=trace.line.color),
-            tickfont=dict(size=9, color=trace.line.color),
-            overlaying="y" if i > 0 else None,
-            side=side,
-            anchor="free",
-            position=1.0 - (offset / 1000) if side == "right" else (offset / 1000),
-            rangemode="tozero",
-            showgrid=False,
-            zeroline=True,
+        fig.update_layout(
+            {f"yaxis{i+1}": dict(
+                title=tag,
+                titlefont=dict(size=10, color=color),
+                tickfont=dict(size=9, color=color),
+                overlaying="y" if i > 0 else None,
+                side=side,
+                anchor="free",
+                position=1.0 - (offset / 1000) if side == "right" else (offset / 1000),
+                rangemode="tozero",
+                showgrid=False,
+                zeroline=True,
+            )}
         )
-        trace.yaxis = f"y{i+1}"
+        fig.data[i].yaxis = f"y{i+1}"
 
+    # Final layout
     fig.update_layout(
         template="plotly_dark",
         height=750,
@@ -147,16 +161,13 @@ elif selected_tags:
         hovermode="x unified",
         xaxis_title="Timestamp",
         legend=dict(
-            orientation="h",
-            y=-0.25,
-            font=dict(size=10),
-            bgcolor="rgba(0,0,0,0)"
+            orientation="h", y=-0.25, font=dict(size=10), bgcolor="rgba(0,0,0,0)"
         ),
         title=dict(
-            text="📈 Tag Trends (Independent Scales, Feedrate Corrected)",
+            text="📈 Tag Trends (Independent Scales with Feedrate Fix)",
             x=0.5,
             xanchor="center",
-            font=dict(size=22, color="#FFFFFF")
+            font=dict(size=22, color="#FFFFFF"),
         ),
     )
 
@@ -164,8 +175,8 @@ elif selected_tags:
 else:
     st.info("Select one or more tags to view their trends.")
 
-# ==============================
+# ===================================
 # RAW DATA VIEW
-# ==============================
+# ===================================
 with st.expander("View Raw Data"):
     st.dataframe(df_filtered)
