@@ -9,31 +9,42 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- TITLE & INTRO ---
+# --- HEADER ---
 st.title("Comco – RTA Daily Trends Dashboard (Raw Data)")
-st.markdown(
-    """
-    Plots unmodified Feedrate, Motor Current, Setpoint, and Load values directly from CSV.  
-    Data source: [WF with current data.csv](https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv)
-    """
-)
+st.markdown("""
+Plots unmodified Feedrate, Motor Current, Setpoint, and Load values directly from CSV.  
+**Data Source:** [WF with current data.csv](https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv)
+""")
 
 # --- LOAD DATA ---
 @st.cache_data(ttl=3600)
 def load_data():
     url = "https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv"
-    df = pd.read_csv(url, encoding="utf-8", on_bad_lines="skip")
+    encodings = ["utf-8", "utf-16", "latin1"]
+    for enc in encodings:
+        try:
+            df = pd.read_csv(url, encoding=enc, on_bad_lines="skip")
+            st.info(f"Loaded successfully using encoding: `{enc}`")
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        st.error("❌ Could not decode CSV file. Try saving it as UTF-8 or UTF-16 in Excel.")
+        st.stop()
+
     # Normalize column names
     df.columns = [c.strip().replace(" ", "_") for c in df.columns]
-    # Find time column
+
+    # Detect timestamp column
     time_col = next((c for c in df.columns if "time" in c.lower()), None)
     if time_col:
         df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
         df = df.dropna(subset=[time_col])
     else:
-        st.error("No timestamp column found.")
+        st.error("❌ No timestamp column found in the file.")
         st.stop()
-    # Keep only numeric columns
+
+    # Keep numeric data only
     num_cols = df.select_dtypes(include="number").columns.tolist()
     return df, time_col, num_cols
 
@@ -51,30 +62,30 @@ selected_tags = st.sidebar.multiselect(
     "Select Tags to Display", available_tags, default=["Feedrate"]
 )
 
-# --- DATA FILTERING ---
+# --- FILTER BY TIME ---
 df["TimeOnly"] = df[time_col].dt.time
 filtered = df[(df["TimeOnly"] >= start_time) & (df["TimeOnly"] <= end_time)]
 
 if filtered.empty:
-    st.warning("⚠️ No data for selected filters.")
+    st.warning("⚠️ No data found for selected time range.")
     st.stop()
 
-# --- SHORTEN COLUMN NAMES ---
+# --- SHORT LABELS ---
 def short_name(tag):
-    # Remove long path segments like PLC paths
     if "/" in tag or "\\" in tag:
         return tag.split("/")[-1].split("\\")[-1]
     return tag
 
 short_labels = {col: short_name(col) for col in selected_tags}
 
-# --- PLOT MULTI-AXIS TREND ---
+# --- PLOTTING ---
 st.subheader("Raw Trend Data (Continuous Lines with Independent Scales)")
 
 fig = go.Figure()
 colors = [
-    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+    "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+    "#bcbd22", "#17becf"
 ]
 
 for i, tag in enumerate(selected_tags):
@@ -87,31 +98,30 @@ for i, tag in enumerate(selected_tags):
             y=filtered[tag],
             mode="lines",
             name=short_labels[tag],
-            line=dict(color=color, width=1.5),
+            line=dict(color=color, width=1.3),
             yaxis=y_axis,
         )
     )
 
-# Configure axes
+# Base axis
 fig.update_layout(
     xaxis=dict(title="Time"),
     yaxis=dict(title=short_labels.get(selected_tags[0], selected_tags[0])),
     template="plotly_dark",
     hovermode="x unified",
+    legend=dict(orientation="h", y=-0.2),
 )
 
-# Add extra axes for multiple tags
+# Add extra y-axes
 for i in range(1, len(selected_tags)):
-    fig.update_layout(
-        {f"yaxis{i+1}": dict(
+    fig.update_layout({
+        f"yaxis{i+1}": dict(
             title=short_labels[selected_tags[i]],
             overlaying="y",
             side="right" if i % 2 == 1 else "left",
-            position=1 - (0.05 * i)
-        )}
-    )
+            position=1 - (0.04 * i)
+        )
+    })
 
 st.plotly_chart(fig, use_container_width=True)
-
-# --- FOOTER ---
-st.caption("Comco RTA Dashboard • Plots from raw historian export • Powered by Streamlit + Plotly")
+st.caption("Comco RTA Dashboard • Raw historian data • Multi-axis visualization • Powered by Streamlit + Plotly")
