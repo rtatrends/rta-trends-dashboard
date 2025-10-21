@@ -143,7 +143,7 @@ elif selected_tags:
             showgrid=False,
             zeroline=True,
         )
-        fig.data[i].y axis = f"y{i+1}"
+        fig.data[i].yaxis = f"y{i+1}"
 
     # Apply all axes at once
     fig.update_layout(yaxes_conf
