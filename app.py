@@ -1,104 +1,117 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import time
 
-st.set_page_config(page_title="Comco – WF Raw Daily Trends", layout="wide")
+# --- CONFIGURATION ---
+st.set_page_config(
+    page_title="Comco – RTA Daily Trends Dashboard (Raw Data)",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# --- TITLE & INTRO ---
 st.title("Comco – RTA Daily Trends Dashboard (Raw Data)")
-st.caption("Plots unmodified Feedrate, Motor Current, Setpoint, and Load values directly from CSV.")
+st.markdown(
+    """
+    Plots unmodified Feedrate, Motor Current, Setpoint, and Load values directly from CSV.  
+    Data source: [WF with current data.csv](https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv)
+    """
+)
 
 # --- LOAD DATA ---
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_data():
-    try:
-        df = pd.read_csv("WF with current data.csv", encoding="utf-16", on_bad_lines="skip")
-    except UnicodeError:
-        df = pd.read_csv("WF with current data.csv", encoding="utf-8", on_bad_lines="skip")
-
-    # Clean up column names
-    df.columns = [c.strip().replace("\n", " ").replace("\r", " ").replace("  ", " ") for c in df.columns]
-    df.columns = [c.replace(".", "_").replace("(", "").replace(")", "").replace("/", "_") for c in df.columns]
-
-    # Ensure Time column exists
-    time_col = None
-    for c in df.columns:
-        if "Time" in c or "Timestamp" in c or "Date" in c:
-            time_col = c
-            break
-
-    if not time_col:
-        st.error("❌ No timestamp column found. Please make sure your CSV has a Time column.")
+    url = "https://raw.githubusercontent.com/rtatrends/rta-trends-dashboard/refs/heads/main/WF%20with%20current%20data.csv"
+    df = pd.read_csv(url, encoding="utf-8", on_bad_lines="skip")
+    # Normalize column names
+    df.columns = [c.strip().replace(" ", "_") for c in df.columns]
+    # Find time column
+    time_col = next((c for c in df.columns if "time" in c.lower()), None)
+    if time_col:
+        df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
+        df = df.dropna(subset=[time_col])
+    else:
+        st.error("No timestamp column found.")
         st.stop()
+    # Keep only numeric columns
+    num_cols = df.select_dtypes(include="number").columns.tolist()
+    return df, time_col, num_cols
 
-    df.rename(columns={time_col: "Time"}, inplace=True)
-    df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
-    df = df.dropna(subset=["Time"])
-    return df
+df, time_col, num_cols = load_data()
+st.success(f"✅ Data loaded successfully ({len(df)} rows).")
 
-df = load_data()
-st.success(f"✅ Data loaded successfully ({len(df):,} rows).")
-
-# --- FILTERS ---
+# --- SIDEBAR FILTERS ---
 st.sidebar.header("Filters")
-start_time = st.sidebar.time_input("Start Time", value=time(0, 0))
-end_time = st.sidebar.time_input("End Time", value=time(23, 59))
 
-# Allow all columns except Time for selection
-numeric_cols = [c for c in df.columns if c != "Time" and pd.api.types.is_numeric_dtype(df[c])]
-if not numeric_cols:
-    st.warning("⚠️ No numeric columns found for plotting.")
-    st.stop()
+start_time = st.sidebar.time_input("Start Time", value=pd.Timestamp("00:00").time())
+end_time = st.sidebar.time_input("End Time", value=pd.Timestamp("23:59").time())
 
-selected_cols = st.sidebar.multiselect("Select Tags to Display", numeric_cols, default=numeric_cols[:3])
+available_tags = num_cols
+selected_tags = st.sidebar.multiselect(
+    "Select Tags to Display", available_tags, default=["Feedrate"]
+)
 
-filtered = df[
-    (df["Time"].dt.time >= start_time) &
-    (df["Time"].dt.time <= end_time)
-]
+# --- DATA FILTERING ---
+df["TimeOnly"] = df[time_col].dt.time
+filtered = df[(df["TimeOnly"] >= start_time) & (df["TimeOnly"] <= end_time)]
 
-# --- PLOT ---
-st.subheader("Raw Trend Data (Continuous Lines with Independent Scales)")
-
-if filtered.empty or not selected_cols:
+if filtered.empty:
     st.warning("⚠️ No data for selected filters.")
     st.stop()
 
+# --- SHORTEN COLUMN NAMES ---
+def short_name(tag):
+    # Remove long path segments like PLC paths
+    if "/" in tag or "\\" in tag:
+        return tag.split("/")[-1].split("\\")[-1]
+    return tag
+
+short_labels = {col: short_name(col) for col in selected_tags}
+
+# --- PLOT MULTI-AXIS TREND ---
+st.subheader("Raw Trend Data (Continuous Lines with Independent Scales)")
+
 fig = go.Figure()
+colors = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+]
 
-for i, col in enumerate(selected_cols):
-    axis_name = f"y{i+1}"
-    fig.add_trace(go.Scatter(
-        x=filtered["Time"],
-        y=filtered[col],
-        mode="lines",
-        name=col,
-        line=dict(width=1.5),
-        connectgaps=True,
-        yaxis=axis_name
-    ))
+for i, tag in enumerate(selected_tags):
+    color = colors[i % len(colors)]
+    axis_suffix = "" if i == 0 else str(i + 1)
+    y_axis = "y" + axis_suffix
+    fig.add_trace(
+        go.Scatter(
+            x=filtered[time_col],
+            y=filtered[tag],
+            mode="lines",
+            name=short_labels[tag],
+            line=dict(color=color, width=1.5),
+            yaxis=y_axis,
+        )
+    )
 
-    if i == 0:
-        fig.update_layout(yaxis=dict(title=col, showgrid=True))
-    else:
-        fig.update_layout({
-            f"yaxis{i+1}": dict(
-                title=col,
-                overlaying="y",
-                side="right",
-                position=1 - (i * 0.05),
-                showgrid=False
-            )
-        })
-
+# Configure axes
 fig.update_layout(
+    xaxis=dict(title="Time"),
+    yaxis=dict(title=short_labels.get(selected_tags[0], selected_tags[0])),
     template="plotly_dark",
-    title="WeighFeeder & Motor Trend (Raw Continuous Values)",
-    xaxis=dict(title="Time", rangeslider_visible=False),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-    height=750
+    hovermode="x unified",
 )
+
+# Add extra axes for multiple tags
+for i in range(1, len(selected_tags)):
+    fig.update_layout(
+        {f"yaxis{i+1}": dict(
+            title=short_labels[selected_tags[i]],
+            overlaying="y",
+            side="right" if i % 2 == 1 else "left",
+            position=1 - (0.05 * i)
+        )}
+    )
 
 st.plotly_chart(fig, use_container_width=True)
 
-with st.expander("🔍 Data Preview"):
-    st.dataframe(filtered[["Time"] + selected_cols].head(100))
+# --- FOOTER ---
+st.caption("Comco RTA Dashboard • Plots from raw historian export • Powered by Streamlit + Plotly")
