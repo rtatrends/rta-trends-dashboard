@@ -1,94 +1,91 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, time
+from datetime import datetime
 
-# ---------- CONFIG ----------
 st.set_page_config(page_title="Comco - RTA Trends Dashboard", layout="wide")
 
-DATA_PATH = "Last_30_Day_Data_Group_45.csv"  # <-- file in your repo root
-
-# ---------- LOAD DATA ----------
+# --- Load data from repo ---
 @st.cache_data
 def load_data():
-    try:
-        df = pd.read_csv(DATA_PATH, parse_dates=["Time"])
-        df["Tag_Name"] = df["Tag_Name"].astype(str).str.strip()
-        df["Equipment"] = df["Equipment"].astype(str).str.strip()
-        df["Tag_Group"] = df["Tag_Group"].astype(str).str.strip()
-        df.sort_values("Time", inplace=True)
-        return df
-    except Exception as e:
-        st.error(f"❌ Failed to load data: {e}")
-        return pd.DataFrame()
+    df = pd.read_csv("FactoryData_Clean_30Day.csv", parse_dates=["Time"])
+    df = df.sort_values("Time")
+    return df
 
 df = load_data()
-if df.empty:
-    st.stop()
 
-# ---------- SIDEBAR FILTERS ----------
+# --- Sidebar Filters ---
 st.sidebar.header("Filters")
 
-min_date = df["Time"].min().date()
-max_date = df["Time"].max().date()
-date_range = st.sidebar.date_input("Date range", [min_date, max_date])
+min_date, max_date = df["Time"].min().date(), df["Time"].max().date()
+date_range = st.sidebar.date_input("Date range", value=[min_date, max_date])
 
-start_time = st.sidebar.time_input("Start", time(0, 0))
-end_time = st.sidebar.time_input("End", time(23, 59))
+start_time = st.sidebar.time_input("Start", value=datetime.strptime("00:00", "%H:%M").time())
+end_time = st.sidebar.time_input("End", value=datetime.strptime("23:59", "%H:%M").time())
 
-tags = st.sidebar.multiselect("Select Tags", sorted(df["Tag_Name"].unique()), ["Feedrate"])
-filter_name = st.sidebar.text_input("Filter by name or equipment")
+tag_options = sorted(df["Tag_Name"].unique())
+selected_tags = st.sidebar.multiselect("Select Tags", tag_options, default=["Feedrate"])
 
-quality_good = st.sidebar.checkbox("Quality = Good only", False)
-fill_feedrate = st.sidebar.checkbox("Use cleaned Feedrate (fill false dips)", False)
-show_markers = st.sidebar.checkbox("Markers", False)
+filter_text = st.sidebar.text_input("Filter by name or equipment")
 
-# ---------- FILTERING ----------
-mask = (df["Time"].dt.date >= date_range[0]) & (df["Time"].dt.date <= date_range[-1])
-mask &= (df["Time"].dt.time >= start_time) & (df["Time"].dt.time <= end_time)
-if tags:
-    mask &= df["Tag_Name"].isin(tags)
-if filter_name:
-    mask &= df["Equipment"].str.contains(filter_name, case=False, na=False)
-if quality_good and "Quality" in df.columns:
-    mask &= df["Quality"].astype(str).str.contains("Good", case=False, na=False)
+quality_good = st.sidebar.checkbox("Quality = Good only", value=False)
+fill_dips = st.sidebar.checkbox("Use cleaned Feedrate (fill false dips)", value=False)
+show_markers = st.sidebar.checkbox("Markers", value=False)
 
-filtered = df.loc[mask].copy()
-if filtered.empty:
-    st.warning("No matching data for selected filters.")
-    st.stop()
+# --- Filter data ---
+f = df.copy()
 
-if fill_feedrate and "Feedrate" in tags:
-    filtered["Value"] = filtered.groupby("Equipment")["Value"].transform(
-        lambda s: s.ffill(limit=10)
+if quality_good:
+    f = f[f["Quality"].str.contains("Good", case=False, na=False)]
+
+if len(date_range) == 2:
+    start_dt = pd.to_datetime(f"{date_range[0]} {start_time}")
+    end_dt = pd.to_datetime(f"{date_range[1]} {end_time}")
+    f = f[(f["Time"] >= start_dt) & (f["Time"] <= end_dt)]
+
+if selected_tags:
+    f = f[f["Tag_Name"].isin(selected_tags)]
+
+if filter_text:
+    f = f[f["Equipment"].str.contains(filter_text, case=False, na=False) |
+          f["Tag_Name"].str.contains(filter_text, case=False, na=False)]
+
+# --- Handle Feedrate dips (optional) ---
+if fill_dips and "Feedrate" in f["Tag_Name"].unique():
+    feed_df = f[f["Tag_Name"] == "Feedrate"].copy()
+    feed_df["Value_Cleaned"] = feed_df["Value"]
+    # Fill short 30-sec gaps where motor was running but feedrate dropped
+    feed_df["Gap"] = feed_df["Time"].diff().dt.total_seconds().fillna(0)
+    feed_df.loc[(feed_df["Gap"] < 90) & (feed_df["Value_Cleaned"] == 0), "Value_Cleaned"] = None
+    feed_df["Value_Cleaned"] = feed_df["Value_Cleaned"].interpolate()
+    f = pd.concat([f[f["Tag_Name"] != "Feedrate"], feed_df], ignore_index=True)
+    f["PlotValue"] = f["Value_Cleaned"].fillna(f["Value"])
+else:
+    f["PlotValue"] = f["Value"]
+
+# --- Plot ---
+if not f.empty:
+    fig = px.line(
+        f,
+        x="Time",
+        y="PlotValue",
+        color="Tag_Name",
+        title="Trend Data (Raw Values)",
+        markers=show_markers,
     )
+    fig.update_traces(connectgaps=True)
+    fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Value (raw units)",
+        legend_title="Tag",
+        template="plotly_dark",
+        height=600,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.warning("No data found for selected filters.")
 
-# ---------- PLOT ----------
-fig = px.line(
-    filtered,
-    x="Time",
-    y="Value",
-    color="Tag_Name",
-    line_shape="linear",
-    title="Trend Data (Raw Values)",
-    markers=show_markers,
-)
-fig.update_layout(
-    height=650,
-    xaxis_title="Time",
-    yaxis_title="Value (raw units)",
-    legend_title="Tag",
-    hovermode="x unified",
-)
-
-st.title("Comco - RTA Trends Dashboard")
-st.caption(f"Source: repo data • Last updated: {datetime.now().strftime('%a %b %d %H:%M:%S %Y')}")
-st.plotly_chart(fig, use_container_width=True)
-
-# ---------- DATA PREVIEW ----------
-with st.expander("📊 Data Preview"):
-    st.dataframe(filtered.tail(200))
-
-# ---------- FOOTER ----------
+# --- Footer ---
 st.markdown("---")
-st.caption("FactoryTalk-style synchronized trends • Raw + Optional cleaned Feedrate.")
+st.caption("Source: repo data • Last updated: " + datetime.now().strftime("%a %b %d %H:%M:%S %Y"))
