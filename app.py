@@ -82,4 +82,65 @@ if df_filtered.empty:
 elif selected_tags:
     fig = go.Figure()
     colors = [
-        "#FF6B6B", "#4ECDC4", "#FFD93D", "#1A7
+        "#FF6B6B", "#4ECDC4", "#FFD93D", "#1A73E8",
+        "#9C27B0", "#00BFA6", "#F39C12", "#E74C3C",
+        "#3498DB", "#2ECC71"
+    ]
+
+    # Add traces safely
+    for i, tag in enumerate(selected_tags):
+        sub = df_filtered[df_filtered["Tag"] == tag]
+        if sub.empty:
+            continue
+
+        tag_lower = tag.lower()
+        scale_factor = 0.001 if any(k in tag_lower for k in ["feedrate", "tph", "rate"]) else 1
+        sub["ScaledValue"] = sub["Value"] * scale_factor
+
+        color = colors[i % len(colors)]
+        axis_name = f"y{i+1}"
+        side = "right" if i % 2 else "left"
+
+        fig.add_trace(
+            go.Scatter(
+                x=sub["Timestamp"],
+                y=sub["ScaledValue"],
+                name=f"{tag}{' (×0.001)' if scale_factor != 1 else ''}",
+                mode="lines",
+                line=dict(width=2, color=color),
+                yaxis=axis_name,
+            )
+        )
+
+        fig.update_yaxes(
+            title_text=tag,
+            titlefont=dict(color=color, size=10),
+            tickfont=dict(color=color, size=9),
+            side=side,
+            overlaying="y" if i > 0 else None,
+            rangemode="tozero",
+            showgrid=False,
+            zeroline=True,
+            anchor="free",
+            position=(0.05 * i) if side == "left" else (1 - 0.05 * i)
+        )
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=750,
+        margin=dict(l=80, r=150, t=80, b=60),
+        hovermode="x unified",
+        xaxis_title="Timestamp",
+        legend=dict(orientation="h", y=-0.25, bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+        title=dict(text="📈 Tag Trends (Independent Y-Axes, Feedrate Corrected)", x=0.5, font=dict(size=22)),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Select tags to visualize trends.")
+
+# ===============================
+# RAW DATA EXPANDER
+# ===============================
+with st.expander("View Raw Data"):
+    st.dataframe(df_filtered)
