@@ -1,88 +1,113 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from datetime import datetime
+import plotly.graph_objects as go
+from datetime import time
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="Comco - Daily WF Trends", layout="wide")
-st.title("Comco - RTA Trends Dashboard (Daily Data)")
+# -----------------------------
+# Streamlit Setup
+# -----------------------------
+st.set_page_config(page_title="Comco – Raw WF Daily Trends", layout="wide")
+st.title("Comco – RTA Daily Trends Dashboard (Raw Data)")
+st.caption("Plots unmodified Feedrate, Motor Current, Setpoint, and Load values directly from CSV.")
 
-st.markdown(
-    "Live visualization of daily WeighFeeder and motor trends "
-    "(Feedrate, Load, Motor Current, Setpoint, etc.)"
-)
-
-# --- LOAD DATA ---
+# -----------------------------
+# Load Raw Data
+# -----------------------------
 @st.cache_data
 def load_data():
     try:
-        df = pd.read_csv("WF_1Day_Clean.csv", parse_dates=["Time"])
-    except FileNotFoundError:
-        df = pd.read_csv("WF with current data.csv", parse_dates=["Time"])
+        df = pd.read_csv("WF with current data.csv", encoding="utf-16", on_bad_lines="skip")
+    except UnicodeError:
+        df = pd.read_csv("WF with current data.csv", encoding="utf-8", on_bad_lines="skip")
+
+    df.columns = [c.strip() for c in df.columns]
+    if "Time" not in df.columns:
+        st.error("❌ 'Time' column not found.")
+        st.stop()
+
+    df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
+    df = df.dropna(subset=["Time"])
     return df
 
 df = load_data()
-st.caption(f"Source: local repo • Last updated: {datetime.now().strftime('%b %d %H:%M:%S %Y')}")
-st.divider()
+st.success(f"✅ Data loaded successfully ({len(df):,} rows).")
 
-# --- SIDEBAR FILTERS ---
+# -----------------------------
+# Identify possible tags
+# -----------------------------
+feed_cols = [c for c in df.columns if "Feedrate" in c or "Feed_Rate" in c]
+motor_cols = [c for c in df.columns if "Motor" in c or "MOT" in c]
+setpoint_cols = [c for c in df.columns if "Setpoint" in c or "SP" in c]
+load_cols = [c for c in df.columns if "Load" in c or "Rolling" in c]
+
+# -----------------------------
+# Sidebar Filters
+# -----------------------------
 st.sidebar.header("Filters")
 
-min_time, max_time = df["Time"].min(), df["Time"].max()
-start_date, end_date = st.sidebar.date_input(
-    "Date range",
-    value=(min_time.date(), max_time.date()),
-    min_value=min_time.date(),
-    max_value=max_time.date(),
+start_time = st.sidebar.time_input("Start Time", value=time(0, 0))
+end_time = st.sidebar.time_input("End Time", value=time(23, 59))
+
+available_cols = [*feed_cols, *motor_cols, *setpoint_cols, *load_cols]
+selected_cols = st.sidebar.multiselect(
+    "Select Tags to Display", available_cols,
+    default=[c for c in available_cols if "Feedrate" in c or "Motor" in c]
 )
 
-start_time = st.sidebar.time_input("Start", value=min_time.time())
-end_time = st.sidebar.time_input("End", value=max_time.time())
-
-available_tags = sorted(df["Tag_Name"].unique())
-selected_tags = st.sidebar.multiselect("Select Tags", available_tags, default=["Feedrate", "Motor_Current"])
-
-equipments = sorted(df["Equipment"].unique())
-selected_eq = st.sidebar.multiselect("Filter by Equipment", equipments)
-
-# --- FILTER DATA ---
-filtered = df.copy()
-filtered = filtered[
-    (filtered["Time"] >= pd.Timestamp.combine(start_date, start_time))
-    & (filtered["Time"] <= pd.Timestamp.combine(end_date, end_time))
+filtered = df[
+    (df["Time"].dt.time >= start_time) &
+    (df["Time"].dt.time <= end_time)
 ]
-if selected_tags:
-    filtered = filtered[filtered["Tag_Name"].isin(selected_tags)]
-if selected_eq:
-    filtered = filtered[filtered["Equipment"].isin(selected_eq)]
 
-if filtered.empty:
-    st.warning("⚠️ No data matches your filters.")
+# -----------------------------
+# Plot Multi-Axis Chart
+# -----------------------------
+st.subheader("Raw Trend Data (Continuous Lines with Independent Scales)")
+
+if filtered.empty or not selected_cols:
+    st.warning("⚠️ No data for selected filters.")
     st.stop()
 
-# --- PLOT ---
-st.subheader("Trend Data (Raw Values)")
-fig = px.line(
-    filtered,
-    x="Time",
-    y="Value",
-    color="Tag_Name",
-    line_group="Equipment",
-    markers=True,
-    hover_data={"Equipment": True, "Value": True, "Quality": True},
-    title="WeighFeeder & Motor Trend (Connected Lines)",
-)
+fig = go.Figure()
+
+for i, col in enumerate(selected_cols):
+    axis_name = f"y{i+1}"
+    fig.add_trace(go.Scatter(
+        x=filtered["Time"],
+        y=filtered[col],
+        mode="lines",
+        name=col,
+        line=dict(width=1.8),
+        connectgaps=True,
+        yaxis=axis_name
+    ))
+
+    # Configure y-axis (overlaying each one)
+    if i == 0:
+        fig.update_layout(yaxis=dict(title=f"{col}", showgrid=True))
+    else:
+        fig.update_layout({
+            f"yaxis{i+1}": dict(
+                title=f"{col}",
+                overlaying="y",
+                side="right",
+                position=1 - (i * 0.05),
+                showgrid=False
+            )
+        })
 
 fig.update_layout(
-    xaxis_title="Time",
-    yaxis_title="Value (raw units)",
-    legend_title="Tag",
     template="plotly_dark",
-    hovermode="x unified",
+    title="WeighFeeder & Motor Trend (Raw Continuous Values)",
+    xaxis=dict(title="Time", rangeslider_visible=False),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+    height=750
 )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# --- DATA PREVIEW ---
-st.subheader("Data Preview")
-st.dataframe(filtered.sort_values("Time").head(30))
+# -----------------------------
+# Data Preview
+# -----------------------------
+with st.expander("🔍 Data Preview"):
+    st.dataframe(filtered[selected_cols + ["Time"]].head(100))
